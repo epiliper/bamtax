@@ -1,8 +1,14 @@
 use crate::Range;
 use std::collections::HashMap;
 
+#[derive(Clone)]
+pub struct Alignment {
+    pub depth: usize,
+    pub span: Range,
+}
+
 pub struct LocusTracker {
-    pub map: HashMap<String, Vec<Range>>,
+    pub map: HashMap<String, Vec<Alignment>>,
 }
 
 impl LocusTracker {
@@ -13,22 +19,34 @@ impl LocusTracker {
     }
 
     pub fn add(&mut self, target: impl ToString, range: Range) {
-        self.map.entry(target.to_string()).or_default().push(range);
+        self.map
+            .entry(target.to_string())
+            .or_default()
+            .push(Alignment {
+                span: range,
+                depth: 1,
+            });
     }
 
     pub fn resolve(&mut self) {
         for (_, v) in self.map.iter_mut() {
-            v.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+            v.sort_by(|a, b| {
+                a.span
+                    .start
+                    .cmp(&b.span.start)
+                    .then(a.span.end.cmp(&b.span.end))
+            });
 
-            let mut dest: Vec<Range> = Vec::with_capacity(v.len());
-            let mut prev = v[0];
+            let mut dest: Vec<Alignment> = Vec::with_capacity(v.len());
+            let mut prev = v[0].clone();
 
             for cur in v[1..].iter() {
-                if cur.start <= prev.end {
-                    prev.end = std::cmp::max(cur.end, prev.end);
+                if cur.span.start <= prev.span.end {
+                    prev.span.end = std::cmp::max(cur.span.end, prev.span.end);
+                    prev.depth += cur.depth
                 } else {
                     dest.push(prev);
-                    prev = *cur;
+                    prev = cur.clone();
                 }
             }
 
@@ -41,6 +59,15 @@ impl LocusTracker {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    fn assert_alignments(lt: &LocusTracker, target: &str, expected: &[(Range, usize)]) {
+        let actual: Vec<_> = lt.map[target]
+            .iter()
+            .map(|alignment| (alignment.span, alignment.depth))
+            .collect();
+
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     pub fn test_resolve_1() {
@@ -59,16 +86,16 @@ mod test {
         lt.add(1, r1);
         lt.add(2, r4);
 
-        assert_eq!(lt.map.get("1"), Some(&vec![r3, r2, r1]));
-        assert_eq!(lt.map.get("2"), Some(&vec![r4]));
+        assert_alignments(&lt, "1", &[(r3, 1), (r2, 1), (r1, 1)]);
+        assert_alignments(&lt, "2", &[(r4, 1)]);
 
         lt.resolve();
-        assert_eq!(
-            lt.map.get("1"),
-            Some(&vec![Range { start: 0, end: 350 }, r3])
+        assert_alignments(
+            &lt,
+            "1",
+            &[(Range { start: 0, end: 350 }, 2), (r3, 1)],
         );
-
-        assert_eq!(lt.map.get("2"), Some(&vec![Range { start: 0, end: 1 }]));
+        assert_alignments(&lt, "2", &[(Range { start: 0, end: 1 }, 1)]);
     }
 
     #[test]
@@ -80,13 +107,14 @@ mod test {
 
         lt.resolve();
 
-        assert_eq!(
-            lt.map.get("1"),
-            Some(&vec![
-                Range { start: 0, end: 10 },
-                Range { start: 20, end: 30 },
-                Range { start: 40, end: 50 },
-            ])
+        assert_alignments(
+            &lt,
+            "1",
+            &[
+                (Range { start: 0, end: 10 }, 1),
+                (Range { start: 20, end: 30 }, 1),
+                (Range { start: 40, end: 50 }, 1),
+            ],
         );
     }
 
@@ -98,7 +126,7 @@ mod test {
 
         lt.resolve();
 
-        assert_eq!(lt.map.get("1"), Some(&vec![Range { start: 0, end: 20 }]));
+        assert_alignments(&lt, "1", &[(Range { start: 0, end: 20 }, 2)]);
     }
 
     #[test]
@@ -110,7 +138,7 @@ mod test {
 
         lt.resolve();
 
-        assert_eq!(lt.map.get("1"), Some(&vec![Range { start: 0, end: 20 }]));
+        assert_alignments(&lt, "1", &[(Range { start: 0, end: 20 }, 3)]);
     }
 
     #[test]
@@ -122,7 +150,7 @@ mod test {
 
         lt.resolve();
 
-        assert_eq!(lt.map.get("1"), Some(&vec![Range { start: 0, end: 15 }]));
+        assert_alignments(&lt, "1", &[(Range { start: 0, end: 15 }, 3)]);
     }
 
     #[test]
@@ -147,13 +175,7 @@ mod test {
 
         lt.resolve();
 
-        assert_eq!(lt.map.get("1"), Some(&vec![Range { start: 0, end: 15 }]));
-        assert_eq!(
-            lt.map.get("2"),
-            Some(&vec![Range {
-                start: 100,
-                end: 130,
-            }])
-        );
+        assert_alignments(&lt, "1", &[(Range { start: 0, end: 15 }, 2)]);
+        assert_alignments(&lt, "2", &[(Range { start: 100, end: 130 }, 2)]);
     }
 }

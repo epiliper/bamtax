@@ -16,6 +16,7 @@ pub struct Taxon {
 #[derive(Debug)]
 pub struct Taxonomy {
     nodes: HashMap<u32, Taxon>,
+    memo: HashMap<u32, Option<u32>>,
 }
 
 impl Taxonomy {
@@ -59,20 +60,27 @@ impl Taxonomy {
     }
 
     /// Finds the requested taxon's closest ancestor with rank `species`.
-    pub fn species(&self, tax_id: u32) -> Option<&Taxon> {
+    pub fn species(&mut self, tax_id: u32) -> Option<&Taxon> {
+        if let Some(memo) = self.memo.get(&tax_id) {
+            return memo.and_then(|t| self.get(t));
+        }
+
         let mut seen = HashSet::new();
         let mut current = tax_id;
 
         loop {
             if !seen.insert(current) {
+                self.memo.insert(tax_id, None);
                 return None;
             }
 
             let taxon = self.nodes.get(&current)?;
             if taxon.rank == "species" {
+                self.memo.insert(tax_id, Some(taxon.tax_id));
                 return Some(taxon);
             }
             if taxon.parent_tax_id == current {
+                self.memo.insert(tax_id, None);
                 return None;
             }
             current = taxon.parent_tax_id;
@@ -82,6 +90,7 @@ impl Taxonomy {
     fn from_readers(nodes: impl BufRead, names: impl BufRead) -> Result<Self> {
         let mut taxonomy = Self {
             nodes: HashMap::new(),
+            memo: HashMap::new(),
         };
 
         for (line_number, line) in nodes.lines().enumerate() {
@@ -186,7 +195,7 @@ mod tests {
 
     #[test]
     fn resolves_species_for_descendant_tax_id() {
-        let taxonomy = taxonomy();
+        let mut taxonomy = taxonomy();
 
         assert_eq!(taxonomy.species(11).unwrap().tax_id, 10);
         assert_eq!(taxonomy.species(10).unwrap().name, "Example species");

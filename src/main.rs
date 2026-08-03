@@ -24,10 +24,10 @@ struct Args {
     #[arg(short = 'o')]
     pub output: String,
 
-    #[arg(short = 'f', default_value_t = 0.5)]
+    #[arg(short = 'f', default_value_t = 0.4)]
     pub min_frac_read_aligned: f32,
 
-    #[arg(short = 'a', default_value_t = 0.6)]
+    #[arg(short = 'a', default_value_t = 0.4)]
     pub min_frac_read_matched: f32,
 
     #[arg(short = 't')]
@@ -66,16 +66,22 @@ fn filter_read(
     Ok(bases_aligned >= mina && bases_matched >= minm)
 }
 
-fn record_get_taxid(header: &HeaderView, rec: &Record) -> Result<u32, Error> {
-    let tname = header
-        .target_names()
+fn record_get_taxid(tnames: &[Vec<u8>], rec: &Record) -> Result<u32, Error> {
+    let tname = tnames
         .get(rec.tid() as usize)
         .with_context(|| format!("Invalid TID {} not in header", rec.tid()))
         .map(|bytes| std::str::from_utf8(bytes).unwrap())?;
 
     if let Some((_header, meta)) = tname.split_once("|taxid:") {
-        let (num, _) = meta.split_once(" ").unwrap();
-        num.parse::<u32>().map_err(|e| anyhow::anyhow!(e))
+        let digits = meta
+            .bytes()
+            .take_while(|b| b.is_ascii_digit())
+            .collect::<Vec<u8>>();
+
+        std::str::from_utf8(&digits)
+            .expect("invalid taxid string")
+            .parse::<u32>()
+            .map_err(|e| anyhow::anyhow!(e))
     } else {
         anyhow::bail!("no taxid pattern in read header!");
     }
@@ -84,16 +90,31 @@ fn record_get_taxid(header: &HeaderView, rec: &Record) -> Result<u32, Error> {
 fn main() {
     let args = Args::parse();
 
-    let taxonomy = Taxonomy::from_dir(args.taxonomy_dir).expect("create taxonomy");
+    let mut taxonomy = Taxonomy::from_dir(args.taxonomy_dir).expect("create taxonomy");
 
     let mut lt = LocusTracker::new();
     let mut reader = IndexedReader::from_path(args.input).expect("create reader");
     reader.set_threads(4).expect("set reader threads");
+    reader.fetch(".").expect("fetch everything");
+
+    let mut tnames: Vec<Vec<u8>> = Vec::with_capacity(reader.header().target_count() as usize);
+
+    {
+        for name in reader.header().target_names() {
+            tnames.push(name.to_vec());
+        }
+    }
 
     let mut rec = Record::new();
+    let mut i = 0;
 
     while let Some(result) = reader.read(&mut rec) {
         result.expect("read record");
+
+        i += 1;
+        if i % 1000 == 0 {
+            eprintln!("processed {i} records");
+        }
 
         if rec.is_unmapped() || rec.is_secondary() || rec.is_supplementary() {
             continue;
@@ -102,7 +123,7 @@ fn main() {
         if filter_read(&rec, args.min_frac_read_aligned, args.min_frac_read_matched)
             .expect("filter record")
         {
-            let taxid = record_get_taxid(reader.header(), &rec).expect("get read taxid");
+            let taxid = record_get_taxid(&tnames, &rec).expect("get read taxid");
 
             let species = taxonomy
                 .species(taxid)
@@ -120,4 +141,15 @@ fn main() {
     }
 
     lt.resolve();
+
+    for (k, v) in lt.map.iter() {
+        if v.len() >= 3 {
+            let depth: usize = v.iter().map(|d| d.depth).sum();
+            let nloci = v.len();
+            println!("{}, depth: {}, nloci: {}", k, depth, nloci);
+            // for locus in v {
+            //     println!("{}->{}", locus.span.start, locus.span.end);
+            // }
+        }
+    }
 }
