@@ -1,4 +1,4 @@
-use crate::Range;
+use crate::cmd_cluster::Range;
 use anyhow::Error;
 use rust_htslib::bam::HeaderView;
 use serde::Serialize;
@@ -156,7 +156,7 @@ mod test {
         lt.add(1, 0, r1);
         lt.add(2, 1, r4);
 
-        let report = lt.resolve(0);
+        let report = lt.resolve(0, 1);
         assert_spans(&report, "1", &[Range { start: 0, end: 350 }, r3]);
         assert_spans(&report, "2", &[Range { start: 0, end: 1 }]);
     }
@@ -168,7 +168,7 @@ mod test {
         lt.add(1, 0, Range { start: 0, end: 10 });
         lt.add(1, 0, Range { start: 40, end: 50 });
 
-        let report = lt.resolve(0);
+        let report = lt.resolve(0, 1);
 
         assert_spans(
             &report,
@@ -187,7 +187,7 @@ mod test {
         lt.add(1, 0, Range { start: 10, end: 20 });
         lt.add(1, 0, Range { start: 0, end: 10 });
 
-        let report = lt.resolve(0);
+        let report = lt.resolve(0, 1);
 
         assert_spans(&report, "1", &[Range { start: 0, end: 20 }]);
     }
@@ -199,7 +199,7 @@ mod test {
         lt.add(1, 0, Range { start: 0, end: 20 });
         lt.add(1, 0, Range { start: 5, end: 15 });
 
-        let report = lt.resolve(0);
+        let report = lt.resolve(0, 1);
 
         assert_spans(&report, "1", &[Range { start: 0, end: 20 }]);
     }
@@ -211,7 +211,7 @@ mod test {
         lt.add(1, 0, Range { start: 0, end: 5 });
         lt.add(1, 0, Range { start: 4, end: 10 });
 
-        let report = lt.resolve(0);
+        let report = lt.resolve(0, 1);
 
         assert_spans(&report, "1", &[Range { start: 0, end: 15 }]);
     }
@@ -238,7 +238,7 @@ mod test {
             },
         );
 
-        let report = lt.resolve(0);
+        let report = lt.resolve(0, 1);
 
         assert_spans(&report, "1", &[Range { start: 0, end: 15 }]);
         assert_spans(
@@ -256,7 +256,7 @@ mod test {
         let mut lt = LocusTracker::new();
         lt.add("species", 0, Range { start: 0, end: 10 });
         lt.add("species", 1, Range { start: 20, end: 30 });
-        let report = lt.resolve(0);
+        let report = lt.resolve(0, 1);
         let header = test_header();
         let mut writer = csv::Writer::from_writer(Vec::new());
 
@@ -278,7 +278,7 @@ mod test {
     fn serializes_report_as_tsv() {
         let mut lt = LocusTracker::new();
         lt.add("species", 0, Range { start: 0, end: 10 });
-        let report = lt.resolve(0);
+        let report = lt.resolve(0, 1);
         let header = test_header();
         let mut writer = csv::WriterBuilder::new()
             .delimiter(b'\t')
