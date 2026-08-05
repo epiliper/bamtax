@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq)]
 pub struct Taxon {
     pub tax_id: u32,
     pub parent_tax_id: u32,
@@ -13,13 +13,29 @@ pub struct Taxon {
     pub name: String,
 }
 
+impl PartialEq for Taxon {
+    fn eq(&self, other: &Self) -> bool {
+        self.tax_id == other.tax_id
+    }
+}
+
+impl std::hash::Hash for Taxon {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
+        self.tax_id.hash(state)
+    }
+}
+
 #[derive(Debug)]
 pub struct Taxonomy {
     nodes: HashMap<u32, Taxon>,
     memo: HashMap<u32, Option<u32>>,
+    children: HashMap<u32, Vec<u32>>,
 }
 
-impl Taxonomy {
+impl<'a> Taxonomy {
     pub fn from_dir(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let nodes_path = path.join("nodes.dmp");
@@ -37,7 +53,7 @@ impl Taxonomy {
     }
 
     /// Returns the lineage from the root through the requested taxon.
-    pub fn lineage(&self, tax_id: u32) -> Option<Vec<&Taxon>> {
+    pub fn lineage(&'a self, tax_id: u32) -> Option<Vec<&'a Taxon>> {
         let mut lineage = Vec::new();
         let mut seen = HashSet::new();
         let mut current = tax_id;
@@ -88,10 +104,19 @@ impl Taxonomy {
         }
     }
 
+    pub fn descendants(&self, taxid: u32) -> &[u32] {
+        if let Some(c) = self.children.get(&taxid) {
+            c.as_slice()
+        } else {
+            &[]
+        }
+    }
+
     fn from_readers(nodes: impl BufRead, names: impl BufRead) -> Result<Self> {
         let mut taxonomy = Self {
             nodes: HashMap::new(),
             memo: HashMap::new(),
+            children: HashMap::new(),
         };
 
         for (line_number, line) in nodes.lines().enumerate() {
@@ -133,6 +158,19 @@ impl Taxonomy {
             {
                 taxon.name = name.to_owned();
             }
+        }
+
+        // last iteration to build child mappings
+        for (k, v) in taxonomy.nodes.iter() {
+            if v.tax_id == v.parent_tax_id {
+                continue;
+            }
+
+            taxonomy
+                .children
+                .entry(v.parent_tax_id)
+                .or_default()
+                .push(*k);
         }
 
         Ok(taxonomy)

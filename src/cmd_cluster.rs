@@ -46,7 +46,7 @@ pub struct ClusterArgs {
     pub min_loci_per_call: usize,
 }
 
-fn parse_delimiter(value: &str) -> Result<u8, String> {
+pub fn parse_delimiter(value: &str) -> Result<u8, String> {
     if value == "\\t" {
         return Ok(b'\t');
     }
