@@ -19,10 +19,6 @@ pub struct CheckTaxonomyArgs {
     #[arg(short = 'd', long, default_value = "\\t", value_parser = parse_delimiter)]
     pub delimiter: u8,
 
-    /// include hit taxa names in report
-    #[arg(short = 'n', default_value_t = false, long)]
-    pub include_names: bool,
-
     /// output file. defaults to stdout
     #[arg(short = 'o')]
     pub output: Option<String>,
@@ -32,9 +28,11 @@ pub struct CheckTaxonomyArgs {
 }
 
 #[derive(Serialize)]
-struct DatabaseTaxonQueryRow {
-    tax_id: u32,
-    representative: String,
+struct DatabaseTaxonQueryRow<'a> {
+    query: u32,
+    query_name: &'a str,
+    representative: u32,
+    representative_name: &'a str,
 }
 
 pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
@@ -82,28 +80,37 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
         let tid = line.trim().parse::<u32>()?;
         line.clear();
 
+        let query_name = taxonomy
+            .get(tid)
+            .map(|d| d.name.as_str())
+            .unwrap_or("not in taxonomy");
+
         let descendants =
             std::iter::chain(taxonomy.descendants(tid).flatten(), std::iter::once(&tid))
                 .filter(|d| db_contains.contains(d))
                 .copied();
 
         let mut count = 0;
+
         for d in descendants {
             count += 1;
+
+            let representative_name = &taxonomy.get(d).unwrap().name;
+
             csv_writer.serialize(DatabaseTaxonQueryRow {
-                tax_id: tid,
-                representative: if args.include_names {
-                    format!("{d} ({})", &taxonomy.get(d).unwrap().name)
-                } else {
-                    d.to_string()
-                },
+                query: tid,
+                query_name,
+                representative: d,
+                representative_name,
             })?;
         }
 
         if count == 0 {
             csv_writer.serialize(DatabaseTaxonQueryRow {
-                tax_id: tid,
-                representative: "MISSING".to_string(),
+                query: tid,
+                query_name,
+                representative: 0,
+                representative_name: "MISSING",
             })?;
         }
     }
