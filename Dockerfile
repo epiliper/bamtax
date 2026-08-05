@@ -1,22 +1,14 @@
 # syntax=docker/dockerfile:1
 
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS source
-
-WORKDIR /build/source
-ADD https://github.com/epiliper/bamtax.git#release .
-
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS planner
-
-WORKDIR /build/source
-COPY --from=source /build/source .
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS builder
+FROM ubuntu:22.04 AS builder
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
+        build-essential \
+        ca-certificates \
         clang \
         cmake \
+        curl \
         libbz2-dev \
         libcurl4-openssl-dev \
         liblzma-dev \
@@ -25,16 +17,18 @@ RUN apt-get update \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build/source
-COPY --from=planner /build/source/recipe.json recipe.json
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo chef cook --locked --release --recipe-path recipe.json
+RUN curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+        https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain stable
 
-COPY --from=source /build/source .
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /build/source
+ADD https://github.com/epiliper/bamtax.git#release .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release
 
-FROM debian:bookworm-slim
+FROM ubuntu:22.04
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \

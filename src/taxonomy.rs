@@ -75,6 +75,7 @@ impl Taxonomy {
             }
 
             let taxon = self.nodes.get(&current)?;
+
             if taxon.rank == "species" {
                 self.memo.insert(tax_id, Some(taxon.tax_id));
                 return Some(taxon);

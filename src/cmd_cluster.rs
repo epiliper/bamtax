@@ -1,3 +1,4 @@
+#![allow(clippy::unused_io_amount)]
 use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Error};
 use clap::Parser;
@@ -195,6 +196,11 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
                         "Warning: failed to find species for taxon id {}. Skipping...",
                         taxid
                     );
+
+                    failed_read_writer.write(rec.qname())?;
+                    failed_read_writer.write(b"\t")?;
+                    failed_read_writer.write(&tnames[rec.tid() as usize])?;
+                    failed_read_writer.write(b"\n")?;
                 }
             }
         }
