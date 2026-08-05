@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -103,13 +103,20 @@ impl<'a> Taxonomy {
             current = taxon.parent_tax_id;
         }
     }
+    pub fn descendants(&self, taxid: u32) -> impl Iterator<Item = &[u32]> {
+        let mut deque: VecDeque<u32> = VecDeque::from([taxid]);
+        let mut seen: HashSet<u32> = HashSet::new();
 
-    pub fn descendants(&self, taxid: u32) -> &[u32] {
-        if let Some(c) = self.children.get(&taxid) {
-            c.as_slice()
-        } else {
-            &[]
-        }
+        std::iter::from_fn(move || {
+            while let Some(cur) = deque.pop_front() {
+                if seen.insert(cur) {
+                    let children = self.children.get(&cur).map(|v| v.as_slice()).unwrap_or(&[]);
+                    deque.extend(children);
+                    return Some(children);
+                }
+            }
+            None
+        })
     }
 
     fn from_readers(nodes: impl BufRead, names: impl BufRead) -> Result<Self> {

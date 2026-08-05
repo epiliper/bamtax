@@ -5,6 +5,7 @@ mod locus_tracker;
 pub mod taxonomy;
 
 use clap::{Parser, Subcommand};
+use cmd_check_taxonomy::{CheckTaxonomyArgs, check_taxonomy_main};
 use cmd_cluster::{ClusterArgs, cluster_main};
 use cmd_emit_read_names::{EmitNamesArgs, emit_names_main};
 
@@ -12,6 +13,7 @@ use cmd_emit_read_names::{EmitNamesArgs, emit_names_main};
 enum Commands {
     Cluster(ClusterArgs),
     Names(EmitNamesArgs),
+    TaxonCheck(CheckTaxonomyArgs),
 }
 
 #[derive(Parser)]
@@ -26,6 +28,7 @@ pub fn main() {
     let result = match args.command {
         Commands::Cluster(args) => cluster_main(args),
         Commands::Names(args) => emit_names_main(args),
+        Commands::TaxonCheck(args) => check_taxonomy_main(args),
     };
 
     result.unwrap();

@@ -3,7 +3,7 @@ use crate::taxonomy::Taxonomy;
 use anyhow::Error;
 use clap::Parser;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 
 #[derive(Parser)]
@@ -19,6 +19,10 @@ pub struct CheckTaxonomyArgs {
     #[arg(short = 'd', long, default_value = "\\t", value_parser = parse_delimiter)]
     pub delimiter: u8,
 
+    /// include hit taxa names in report
+    #[arg(short = 'n', default_value_t = false, long)]
+    pub include_names: bool,
+
     /// output file. defaults to stdout
     #[arg(short = 'o')]
     pub output: Option<String>,
@@ -28,9 +32,9 @@ pub struct CheckTaxonomyArgs {
 }
 
 #[derive(Serialize)]
-struct DatabaseTaxonQueryRow<'a> {
+struct DatabaseTaxonQueryRow {
     tax_id: u32,
-    reps: &'a [u32],
+    representative: String,
 }
 
 pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
@@ -62,7 +66,7 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
         let tid = line.trim().parse::<u32>()?;
         line.clear();
 
-        taxonomy.descendants(tid).iter().for_each(|t| {
+        taxonomy.descendants(tid).flatten().for_each(|t| {
             db_contains.insert(*t);
         });
 
@@ -73,14 +77,21 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
         let tid = line.trim().parse::<u32>()?;
         line.clear();
 
-        let descendants = std::iter::chain(taxonomy.descendants(tid).iter(), std::iter::once(&tid))
-            .filter(|d| db_contains.contains(d))
-            .copied();
+        let descendants =
+            std::iter::chain(taxonomy.descendants(tid).flatten(), std::iter::once(&tid))
+                .filter(|d| db_contains.contains(d))
+                .copied();
 
-        csv_writer.serialize(DatabaseTaxonQueryRow {
-            tax_id: tid,
-            reps: descendants.collect::<Vec<u32>>().as_slice(),
-        })?;
+        for d in descendants {
+            csv_writer.serialize(DatabaseTaxonQueryRow {
+                tax_id: tid,
+                representative: if args.include_names {
+                    format!("{d} ({})", &taxonomy.get(d).unwrap().name)
+                } else {
+                    d.to_string()
+                },
+            })?;
+        }
     }
 
     Ok(())
