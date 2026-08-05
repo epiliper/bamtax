@@ -66,11 +66,16 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
         let tid = line.trim().parse::<u32>()?;
         line.clear();
 
+        let mut count = 0;
         taxonomy.descendants(tid).flatten().for_each(|t| {
+            count += 1;
             db_contains.insert(*t);
         });
 
-        db_contains.insert(tid);
+        // we queried a leaf node
+        if taxonomy.get(tid).is_some() && count == 0 {
+            db_contains.insert(tid);
+        }
     }
 
     while query_reader.read_line(&mut line)? > 0 {
@@ -82,7 +87,9 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
                 .filter(|d| db_contains.contains(d))
                 .copied();
 
+        let mut count = 0;
         for d in descendants {
+            count += 1;
             csv_writer.serialize(DatabaseTaxonQueryRow {
                 tax_id: tid,
                 representative: if args.include_names {
@@ -90,6 +97,13 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
                 } else {
                     d.to_string()
                 },
+            })?;
+        }
+
+        if count == 0 {
+            csv_writer.serialize(DatabaseTaxonQueryRow {
+                tax_id: tid,
+                representative: "MISSING".to_string(),
             })?;
         }
     }
