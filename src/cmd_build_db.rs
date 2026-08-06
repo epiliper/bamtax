@@ -5,15 +5,17 @@
 use crate::assembly_dir_iterator::AssemblyDirIterator;
 use anyhow::{Context, Error};
 use clap::Parser;
-use seq_io::fasta::{Reader, Record};
+use seq_io::fasta::{Reader as FastaReader, Record};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 use gzp::{
     deflate::Mgzip,
-    par::compress::{ParCompress, ParCompressBuilder},
+    par::compress::{Compression, ParCompress, ParCompressBuilder},
 };
+
+use flate2::read::GzDecoder;
 
 #[derive(Parser)]
 pub struct BuildDbArgs {
@@ -47,7 +49,7 @@ fn seq_n_bases_ambig_and_total(seq: &[u8]) -> (usize, usize) {
     let mut total = 0;
 
     for b in seq.iter().copied() {
-        if base_is_nonambig(b) {
+        if !base_is_nonambig(b) {
             ambig += 1;
         }
         total += 1;
@@ -67,12 +69,13 @@ fn construct_assembly_to_tid_db<P: AsRef<Path>>(
 
         while reader.read_line(&mut line)? > 0 {
             let (assembly, taxid) = line
+                .trim()
                 .split_once("\t")
                 .with_context(|| format!("Invalid assembly to tid line: {line}"))?;
 
             let taxid = taxid
                 .parse::<u32>()
-                .with_context(|| format!("Invalid taxid in line {line}"))?;
+                .with_context(|| format!("Invalid taxid in line {taxid}"))?;
 
             if !ret.contains_key(assembly) {
                 ret.insert(assembly.to_string(), taxid);
@@ -92,8 +95,10 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
 
     let mut writer: Box<dyn std::io::Write> = if args.gzip_fasta {
         let output_file = std::fs::File::create(format!("{}.fasta.gz", args.output_prefix))?;
-        let writer: ParCompress<Mgzip, _> =
-            ParCompressBuilder::new().from_writer(std::io::BufWriter::new(output_file));
+        let writer: ParCompress<Mgzip, _> = ParCompressBuilder::new()
+            .compression_level(Compression::new(4))
+            .num_threads(num_cpus::get())?
+            .from_writer(std::io::BufWriter::new(output_file));
         Box::new(writer)
     } else {
         let output_file = std::fs::File::create(format!("{}.fasta", args.output_prefix))?;
@@ -109,7 +114,14 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
         let mut iterator = AssemblyDirIterator::new(input)?;
 
         while let Some((assembly, fasta)) = iterator.next_item()? {
-            let mut reader = Reader::new(BufReader::new(std::fs::File::open(fasta)?));
+            let reader: Box<dyn std::io::Read> = if fasta.ends_with(".gz") {
+                Box::new(GzDecoder::new(std::fs::File::open(fasta)?))
+            } else {
+                Box::new(std::fs::File::open(fasta)?)
+            };
+
+            let mut reader = FastaReader::new(BufReader::new(reader));
+
             while let Some(rec) = reader.next() {
                 let rec = rec?;
                 let id = rec.id()?;
@@ -122,7 +134,11 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
                 let frac_ambig = ambig as f32 / total as f32;
 
                 if total < args.min_len || frac_ambig > args.max_frac_ambig {
-                    eprintln!("skipping sequence {id}: failed filters");
+                    eprintln!(
+                        "skipping sequence {id}: failed filters. Length: {}. Fraction of sequence ambiguous: {}",
+                        total, frac_ambig
+                    );
+                    continue;
                 }
 
                 seen.insert(id.to_string());

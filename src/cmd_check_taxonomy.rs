@@ -1,9 +1,9 @@
 use crate::cmd_cluster::parse_delimiter;
 use crate::taxonomy::Taxonomy;
-use anyhow::Error;
+use anyhow::{Context, Error};
 use clap::Parser;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 
 #[derive(Parser)]
@@ -46,13 +46,14 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
         .delimiter(args.delimiter)
         .from_writer(outwriter);
 
-    let mut query_reader: BufReader<Box<dyn Read>> = if let Some(input) = args.query_headers {
-        BufReader::new(Box::new(std::fs::File::open(input)?))
-    } else {
-        BufReader::new(Box::new(std::io::stdin()))
-    };
+    let mut query_reader: BufReader<Box<dyn Read>> =
+        if let Some(input) = args.query_headers.as_ref() {
+            BufReader::new(Box::new(std::fs::File::open(input)?))
+        } else {
+            BufReader::new(Box::new(std::io::stdin()))
+        };
 
-    let mut ref_reader = BufReader::new(std::fs::File::open(args.database_headers)?);
+    let mut ref_reader = BufReader::new(std::fs::File::open(&args.database_headers)?);
 
     let taxonomy = Taxonomy::from_dir(args.taxonomy_dir)?;
 
@@ -61,7 +62,10 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
     let mut db_contains: HashSet<u32> = HashSet::new();
 
     while ref_reader.read_line(&mut line)? > 0 {
-        let tid = line.trim().parse::<u32>()?;
+        let tid = line
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("invalid taxon id in {}: {}", &args.database_headers, line))?;
         line.clear();
 
         let mut count = 0;
@@ -77,7 +81,10 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
     }
 
     while query_reader.read_line(&mut line)? > 0 {
-        let tid = line.trim().parse::<u32>()?;
+        let tid = line
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("invalid taxon id in query: {}", line))?;
         line.clear();
 
         let query_name = taxonomy
