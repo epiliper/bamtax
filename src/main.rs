@@ -1,3 +1,5 @@
+mod assembly_dir_iterator;
+pub mod cmd_build_db;
 pub mod cmd_check_taxonomy;
 pub mod cmd_cluster;
 pub mod cmd_emit_read_names;
