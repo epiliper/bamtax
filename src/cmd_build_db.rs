@@ -3,6 +3,7 @@
 #![allow(clippy::unused_io_amount)]
 
 use crate::assembly_dir_iterator::AssemblyDirIterator;
+use crate::cmd_cluster::taxid_from_id_str;
 use anyhow::{Context, Error};
 use clap::Parser;
 use seq_io::fasta::{Reader as FastaReader, Record};
@@ -19,8 +20,11 @@ use flate2::read::GzDecoder;
 
 #[derive(Parser)]
 pub struct BuildDbArgs {
-    #[arg(short = 'i', long, value_delimiter = ',', num_args = 1..)]
+    #[arg(short = 'i', long, num_args = 1..)]
     pub inputs: Vec<String>,
+
+    #[arg(short, long = "reheadered_fastas", num_args = 0..)]
+    pub reheadered_fastas: Vec<String>,
 
     #[arg(short = 'o', long)]
     pub output_prefix: String,
@@ -28,7 +32,7 @@ pub struct BuildDbArgs {
     #[arg(short = 'n', long, default_value_t = 0.30)]
     pub max_frac_ambig: f32,
 
-    #[arg(short = 't', long, value_delimiter = ',', num_args = 1..)]
+    #[arg(short = 't', long, num_args = 1..)]
     pub assembly_to_taxid_map: Vec<String>,
 
     #[arg(short = 'g', long)]
@@ -88,6 +92,75 @@ fn construct_assembly_to_tid_db<P: AsRef<Path>>(
     Ok(ret)
 }
 
+#[inline(always)]
+fn process_metadata_fasta(
+    taxid: u32,
+    fasta: &str,
+    header_writer: &mut Box<dyn std::io::Write>,
+    fasta_writer: &mut Box<dyn std::io::Write>,
+    seen_records: &mut HashSet<String>,
+    min_len: usize,
+    max_frac_ambig: f32,
+    headers_already_changed: bool,
+) -> Result<(), Error> {
+    let reader: Box<dyn std::io::Read> = if fasta.ends_with(".gz") {
+        Box::new(GzDecoder::new(std::fs::File::open(fasta)?))
+    } else {
+        Box::new(std::fs::File::open(fasta)?)
+    };
+
+    let mut reader = FastaReader::new(BufReader::new(reader));
+
+    while let Some(rec) = reader.next() {
+        let rec = rec?;
+        let id = rec.id()?;
+
+        if seen_records.contains(id) {
+            continue;
+        }
+
+        let (ambig, total) = seq_n_bases_ambig_and_total(rec.seq());
+        let frac_ambig = ambig as f32 / total as f32;
+
+        if total < min_len || frac_ambig > max_frac_ambig {
+            eprintln!(
+                "skipping sequence {id}: failed filters. Length: {}. Fraction of sequence ambiguous: {}",
+                total, frac_ambig
+            );
+            continue;
+        }
+
+        seen_records.insert(id.to_string());
+
+        // let taxid = assembly_tid_map.get(&assembly).with_context(|| {
+        //     format!("Assembly {assembly} not found in assembly to taxon id map!")
+        // })?;
+
+        let new_id = if !headers_already_changed {
+            let (acc, desc) = match id.split_once(" ") {
+                Some((acc, desc)) => (acc.to_string(), desc.replace(" ", "_")),
+                None => (id.to_string(), "".to_string()),
+            };
+            format!("{}|taxid:{}|{}", acc, taxid, desc)
+        } else {
+            let _ = taxid_from_id_str(id).with_context(|| {
+                format!("record in pre-reheadered fasta has invalid header: {id}")
+            })?;
+            id.to_string()
+        };
+
+        fasta_writer.write(new_id.as_bytes())?;
+        fasta_writer.write(b"\n")?;
+        fasta_writer.write(rec.seq())?;
+        fasta_writer.write(b"\n")?;
+
+        header_writer.write(new_id.as_bytes())?;
+        header_writer.write(b"\n")?;
+    }
+
+    Ok(())
+}
+
 pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -105,64 +178,42 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
         Box::new(std::io::BufWriter::new(output_file))
     };
 
-    let mut header_writer = std::io::BufWriter::new(std::fs::File::create(format!(
-        "{}_headers.txt",
-        args.output_prefix
-    ))?);
+    let mut header_writer: Box<dyn Write> = Box::new(std::io::BufWriter::new(
+        std::fs::File::create(format!("{}_headers.txt", args.output_prefix))?,
+    ));
 
     for input in args.inputs {
         let mut iterator = AssemblyDirIterator::new(input)?;
 
         while let Some((assembly, fasta)) = iterator.next_item()? {
-            let reader: Box<dyn std::io::Read> = if fasta.ends_with(".gz") {
-                Box::new(GzDecoder::new(std::fs::File::open(fasta)?))
-            } else {
-                Box::new(std::fs::File::open(fasta)?)
-            };
+            let taxid = assembly_tid_map.get(&assembly).with_context(|| {
+                format!("Assembly {assembly} not found in assembly to taxon id map!")
+            })?;
 
-            let mut reader = FastaReader::new(BufReader::new(reader));
-
-            while let Some(rec) = reader.next() {
-                let rec = rec?;
-                let id = rec.id()?;
-
-                if seen.contains(id) {
-                    continue;
-                }
-
-                let (ambig, total) = seq_n_bases_ambig_and_total(rec.seq());
-                let frac_ambig = ambig as f32 / total as f32;
-
-                if total < args.min_len || frac_ambig > args.max_frac_ambig {
-                    eprintln!(
-                        "skipping sequence {id}: failed filters. Length: {}. Fraction of sequence ambiguous: {}",
-                        total, frac_ambig
-                    );
-                    continue;
-                }
-
-                seen.insert(id.to_string());
-
-                let taxid = assembly_tid_map.get(&assembly).with_context(|| {
-                    format!("Assembly {assembly} not found in assembly to taxon id map!")
-                })?;
-
-                let (acc, desc) = match id.split_once(" ") {
-                    Some((acc, desc)) => (acc.to_string(), desc.replace(" ", "_")),
-                    None => (id.to_string(), "".to_string()),
-                };
-
-                let new_id = format!("{}|taxid:{}|{}", acc, taxid, desc);
-
-                writer.write(new_id.as_bytes())?;
-                writer.write(b"\n")?;
-                writer.write(rec.seq())?;
-                writer.write(b"\n")?;
-
-                header_writer.write(new_id.as_bytes())?;
-                header_writer.write(b"\n")?;
-            }
+            process_metadata_fasta(
+                *taxid,
+                fasta.as_str(),
+                &mut header_writer,
+                &mut writer,
+                &mut seen,
+                args.min_len,
+                args.max_frac_ambig,
+                false,
+            )?;
         }
+    }
+
+    for file in &args.reheadered_fastas {
+        process_metadata_fasta(
+            0,
+            file,
+            &mut header_writer,
+            &mut writer,
+            &mut seen,
+            args.min_len,
+            args.max_frac_ambig,
+            true,
+        )?;
     }
 
     header_writer.flush()?;

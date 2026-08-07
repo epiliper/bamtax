@@ -18,14 +18,12 @@ impl AssemblyDirIterator {
         } else {
             None
         };
-
         let mut q = VecDeque::new();
         q.push_back((
             std::fs::read_dir(input)
                 .with_context(|| format!("couldn't read input directory {:?}", input))?,
             assembly_name,
         ));
-
         Ok(Self { q })
     }
 
@@ -41,10 +39,8 @@ impl AssemblyDirIterator {
                 };
                 (entry?, assembly_name.clone())
             };
-
             let path = entry.path();
             let file_type = entry.file_type()?;
-
             if file_type.is_dir() {
                 let child_assembly_name = if is_assembly_dir(&path)? {
                     file_name(&path)?.map(str::to_owned)
@@ -52,10 +48,9 @@ impl AssemblyDirIterator {
                     assembly_name
                 };
                 self.q
-                    .push_back((std::fs::read_dir(&path)?, child_assembly_name));
+                    .push_front((std::fs::read_dir(&path)?, child_assembly_name));
                 continue;
             }
-
             if file_type.is_file()
                 && file_name(&path)?.is_some_and(|name| name.contains(".fna"))
                 && let Some(assembly_name) = assembly_name

@@ -91,6 +91,19 @@ pub fn filter_read(
     Ok(bases_aligned >= mina && bases_matched >= minm)
 }
 
+#[inline(always)]
+pub fn taxid_from_id_str(id: &str) -> Result<u32, Error> {
+    let digits = id
+        .bytes()
+        .take_while(|b| b.is_ascii_digit())
+        .collect::<Vec<u8>>();
+
+    std::str::from_utf8(&digits)
+        .expect("invalid taxid string")
+        .parse::<u32>()
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
 fn record_get_taxid(tnames: &[Vec<u8>], rec: &Record) -> Result<u32, Error> {
     let tname = tnames
         .get(rec.tid() as usize)
@@ -98,15 +111,7 @@ fn record_get_taxid(tnames: &[Vec<u8>], rec: &Record) -> Result<u32, Error> {
         .map(|bytes| std::str::from_utf8(bytes).unwrap())?;
 
     if let Some((_header, meta)) = tname.split_once("|taxid:") {
-        let digits = meta
-            .bytes()
-            .take_while(|b| b.is_ascii_digit())
-            .collect::<Vec<u8>>();
-
-        std::str::from_utf8(&digits)
-            .expect("invalid taxid string")
-            .parse::<u32>()
-            .map_err(|e| anyhow::anyhow!(e))
+        taxid_from_id_str(meta)
     } else {
         anyhow::bail!("no taxid pattern in read header!");
     }

@@ -1,9 +1,9 @@
-use crate::cmd_cluster::parse_delimiter;
+use crate::cmd_cluster::{parse_delimiter, taxid_from_id_str};
 use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Error};
 use clap::Parser;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 
 #[derive(Parser)]
@@ -19,6 +19,9 @@ pub struct CheckTaxonomyArgs {
     #[arg(short = 'd', long, default_value = "\\t", value_parser = parse_delimiter)]
     pub delimiter: u8,
 
+    #[arg(short = 'l', long)]
+    pub list_sequences: bool,
+
     /// output file. defaults to stdout
     #[arg(short = 'o')]
     pub output: Option<String>,
@@ -33,6 +36,17 @@ struct DatabaseTaxonQueryRow<'a> {
     query_name: &'a str,
     representative: u32,
     representative_name: &'a str,
+    n_sequences: usize,
+}
+
+#[derive(Serialize)]
+struct DatabaseTaxonQueryRowWithSequences<'a> {
+    query: u32,
+    query_name: &'a str,
+    representative: u32,
+    representative_name: &'a str,
+    n_sequences: usize,
+    representative_sequences: &'a str,
 }
 
 pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
@@ -60,24 +74,27 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
     let mut line = String::new();
 
     let mut db_contains: HashSet<u32> = HashSet::new();
+    let mut db_seqs: HashMap<u32, Vec<String>> = HashMap::new();
 
     while ref_reader.read_line(&mut line)? > 0 {
-        let tid = line
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("invalid taxon id in {}: {}", &args.database_headers, line))?;
-        line.clear();
+        let l = line.trim();
+        let tid = l
+            .split_once("|taxid:")
+            .map(|(_, l)| taxid_from_id_str(l))
+            .with_context(|| format!("invalid taxon id in {}: {}", &args.database_headers, line))
+            .flatten()?;
 
-        let mut count = 0;
-        taxonomy.descendants(tid).flatten().for_each(|t| {
-            count += 1;
-            db_contains.insert(*t);
-        });
+        // taxonomy.descendants(tid).flatten().for_each(|t| {
+        //     count += 1;
+        //     db_contains.insert(*t);
+        // });
 
         // we queried a leaf node
-        if taxonomy.get(tid).is_some() && count == 0 {
-            db_contains.insert(tid);
-        }
+        // if taxonomy.get(tid).is_some() && count == 0 {
+        db_contains.insert(tid);
+        db_seqs.entry(tid).or_default().push(l.to_string());
+        line.clear();
+        // }
     }
 
     while query_reader.read_line(&mut line)? > 0 {
@@ -103,22 +120,50 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
             count += 1;
 
             let representative_name = &taxonomy.get(d).unwrap().name;
+            let sequences = db_seqs.get(&d).unwrap();
+            let n_sequences = sequences.len();
 
-            csv_writer.serialize(DatabaseTaxonQueryRow {
-                query: tid,
-                query_name,
-                representative: d,
-                representative_name,
-            })?;
+            let representative_sequences = &sequences.join(";");
+
+            if args.list_sequences {
+                csv_writer.serialize(DatabaseTaxonQueryRowWithSequences {
+                    query: tid,
+                    query_name,
+                    representative: d,
+                    representative_name,
+                    n_sequences,
+                    representative_sequences,
+                })?;
+            } else {
+                csv_writer.serialize(DatabaseTaxonQueryRow {
+                    query: tid,
+                    query_name,
+                    representative: d,
+                    representative_name,
+                    n_sequences,
+                })?;
+            }
         }
 
         if count == 0 {
-            csv_writer.serialize(DatabaseTaxonQueryRow {
-                query: tid,
-                query_name,
-                representative: 0,
-                representative_name: "MISSING",
-            })?;
+            if args.list_sequences {
+                csv_writer.serialize(DatabaseTaxonQueryRowWithSequences {
+                    query: tid,
+                    query_name,
+                    representative: 0,
+                    representative_name: "MISSING",
+                    n_sequences: 0,
+                    representative_sequences: "",
+                })?;
+            } else {
+                csv_writer.serialize(DatabaseTaxonQueryRow {
+                    query: tid,
+                    query_name,
+                    representative: 0,
+                    representative_name: "MISSING",
+                    n_sequences: 0,
+                })?;
+            }
         }
     }
 
