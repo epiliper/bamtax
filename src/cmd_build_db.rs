@@ -18,6 +18,8 @@ use gzp::{
 
 use flate2::read::GzDecoder;
 
+const BUFWRITER_CAP: usize = 200 * 1024 * 1024;
+
 #[derive(Parser)]
 pub struct BuildDbArgs {
     #[arg(short = 'i', long, num_args = 1..)]
@@ -69,7 +71,9 @@ fn construct_assembly_to_tid_db<P: AsRef<Path>>(
     let mut ret = HashMap::new();
 
     for p in paths {
-        let mut reader = BufReader::new(std::fs::File::open(p)?);
+        let f = std::fs::File::open(p)?;
+        f.try_lock()?;
+        let mut reader = BufReader::new(f);
 
         while reader.read_line(&mut line)? > 0 {
             let (assembly, taxid) = line
@@ -149,6 +153,7 @@ fn process_metadata_fasta(
             id.to_string()
         };
 
+        fasta_writer.write(b">")?;
         fasta_writer.write(new_id.as_bytes())?;
         fasta_writer.write(b"\n")?;
         fasta_writer.write(rec.seq())?;
@@ -168,19 +173,30 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
 
     let mut writer: Box<dyn std::io::Write> = if args.gzip_fasta {
         let output_file = std::fs::File::create(format!("{}.fasta.gz", args.output_prefix))?;
+        output_file.try_lock()?;
+
         let writer: ParCompress<Mgzip, _> = ParCompressBuilder::new()
             .compression_level(Compression::new(4))
             .num_threads(num_cpus::get())?
-            .from_writer(std::io::BufWriter::new(output_file));
+            .from_writer(std::io::BufWriter::with_capacity(
+                BUFWRITER_CAP,
+                output_file,
+            ));
         Box::new(writer)
     } else {
         let output_file = std::fs::File::create(format!("{}.fasta", args.output_prefix))?;
-        Box::new(std::io::BufWriter::new(output_file))
+        output_file.try_lock()?;
+        Box::new(std::io::BufWriter::with_capacity(
+            BUFWRITER_CAP,
+            output_file,
+        ))
     };
 
-    let mut header_writer: Box<dyn Write> = Box::new(std::io::BufWriter::new(
-        std::fs::File::create(format!("{}_headers.txt", args.output_prefix))?,
-    ));
+    let mut header_writer: Box<dyn Write> = {
+        let file = std::fs::File::create(format!("{}_headers.txt", args.output_prefix))?;
+        file.try_lock()?;
+        Box::new(std::io::BufWriter::with_capacity(BUFWRITER_CAP, file))
+    };
 
     for input in args.inputs {
         let mut iterator = AssemblyDirIterator::new(input)?;
