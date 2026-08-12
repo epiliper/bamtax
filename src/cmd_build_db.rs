@@ -42,6 +42,137 @@ pub struct BuildDbArgs {
 
     #[arg(short = 'l', long, default_value_t = 100)]
     pub min_len: usize,
+
+    /// Approximate uncompressed FASTA size per chunk (for example, 500M)
+    #[arg(long, value_parser = parse_chunksize)]
+    pub chunksize: Option<u64>,
+}
+
+fn parse_chunksize(value: &str) -> Result<u64, String> {
+    let Some((number, suffix)) = value.split_at_checked(value.len().saturating_sub(1)) else {
+        return Err("chunk size must be a positive integer followed by K, M, or G".to_string());
+    };
+    let multiplier = match suffix {
+        "K" => 1024_u64,
+        "M" => 1024_u64.pow(2),
+        "G" => 1024_u64.pow(3),
+        _ => {
+            return Err("chunk size must be a positive integer followed by K, M, or G".to_string());
+        }
+    };
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("chunk size must be a positive integer followed by K, M, or G".to_string());
+    }
+    let number = number
+        .parse::<u64>()
+        .map_err(|_| "chunk size is too large".to_string())?;
+    if number == 0 {
+        return Err("chunk size must be greater than zero".to_string());
+    }
+    number
+        .checked_mul(multiplier)
+        .ok_or_else(|| "chunk size is too large".to_string())
+}
+
+struct DatabaseWriter {
+    output_prefix: String,
+    gzip_fasta: bool,
+    chunksize: Option<u64>,
+    chunk_number: u64,
+    chunk_bytes: u64,
+    fasta_writer: Box<dyn Write>,
+    header_writer: Box<dyn Write>,
+}
+
+impl DatabaseWriter {
+    fn new(output_prefix: String, gzip_fasta: bool, chunksize: Option<u64>) -> Result<Self, Error> {
+        let chunk_number = u64::from(chunksize.is_some());
+        let fasta_writer =
+            Self::create_fasta_writer(&output_prefix, gzip_fasta, chunksize.map(|_| chunk_number))?;
+        let header_file = std::fs::File::create(format!("{output_prefix}_headers.txt"))?;
+        header_file.try_lock()?;
+        let header_writer = Box::new(std::io::BufWriter::with_capacity(
+            BUFWRITER_CAP,
+            header_file,
+        ));
+        Ok(Self {
+            output_prefix,
+            gzip_fasta,
+            chunksize,
+            chunk_number,
+            chunk_bytes: 0,
+            fasta_writer,
+            header_writer,
+        })
+    }
+
+    fn create_fasta_writer(
+        output_prefix: &str,
+        gzip_fasta: bool,
+        chunk_number: Option<u64>,
+    ) -> Result<Box<dyn Write>, Error> {
+        let output_prefix = match chunk_number {
+            Some(number) => format!("{output_prefix}.{number}"),
+            None => output_prefix.to_string(),
+        };
+        if gzip_fasta {
+            let output_file = std::fs::File::create(format!("{output_prefix}.fasta.gz"))?;
+            output_file.try_lock()?;
+            let writer: ParCompress<Mgzip, _> = ParCompressBuilder::new()
+                .compression_level(Compression::new(4))
+                .num_threads(num_cpus::get())?
+                .from_writer(std::io::BufWriter::with_capacity(
+                    BUFWRITER_CAP,
+                    output_file,
+                ));
+            Ok(Box::new(writer))
+        } else {
+            let output_file = std::fs::File::create(format!("{output_prefix}.fasta"))?;
+            output_file.try_lock()?;
+            Ok(Box::new(std::io::BufWriter::with_capacity(
+                BUFWRITER_CAP,
+                output_file,
+            )))
+        }
+    }
+
+    fn write_record(&mut self, id: &str, seq: &[u8]) -> Result<(), Error> {
+        let record_bytes = 1_u64
+            .checked_add(id.len() as u64)
+            .and_then(|size| size.checked_add(1))
+            .and_then(|size| size.checked_add(seq.len() as u64))
+            .and_then(|size| size.checked_add(1))
+            .context("FASTA record is too large")?;
+
+        if self.chunksize.is_some_and(|limit| {
+            self.chunk_bytes > 0 && self.chunk_bytes.saturating_add(record_bytes) > limit
+        }) {
+            self.fasta_writer.flush()?;
+            self.chunk_number += 1;
+            self.fasta_writer = Self::create_fasta_writer(
+                &self.output_prefix,
+                self.gzip_fasta,
+                Some(self.chunk_number),
+            )?;
+            self.chunk_bytes = 0;
+        }
+
+        self.fasta_writer.write_all(b">")?;
+        self.fasta_writer.write_all(id.as_bytes())?;
+        self.fasta_writer.write_all(b"\n")?;
+        self.fasta_writer.write_all(seq)?;
+        self.fasta_writer.write_all(b"\n")?;
+        self.header_writer.write_all(id.as_bytes())?;
+        self.header_writer.write_all(b"\n")?;
+        self.chunk_bytes += record_bytes;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), Error> {
+        self.header_writer.flush()?;
+        self.fasta_writer.flush()?;
+        Ok(())
+    }
 }
 
 #[inline(always)]
@@ -100,8 +231,7 @@ fn construct_assembly_to_tid_db<P: AsRef<Path>>(
 fn process_metadata_fasta(
     taxid: u32,
     fasta: &str,
-    header_writer: &mut Box<dyn std::io::Write>,
-    fasta_writer: &mut Box<dyn std::io::Write>,
+    writer: &mut DatabaseWriter,
     seen_records: &mut HashSet<String>,
     min_len: usize,
     max_frac_ambig: f32,
@@ -153,14 +283,7 @@ fn process_metadata_fasta(
             id.to_string()
         };
 
-        fasta_writer.write(b">")?;
-        fasta_writer.write(new_id.as_bytes())?;
-        fasta_writer.write(b"\n")?;
-        fasta_writer.write(rec.seq())?;
-        fasta_writer.write(b"\n")?;
-
-        header_writer.write(new_id.as_bytes())?;
-        header_writer.write(b"\n")?;
+        writer.write_record(&new_id, rec.seq())?;
     }
 
     Ok(())
@@ -171,32 +294,7 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
 
     let assembly_tid_map = construct_assembly_to_tid_db(&args.assembly_to_taxid_map)?;
 
-    let mut writer: Box<dyn std::io::Write> = if args.gzip_fasta {
-        let output_file = std::fs::File::create(format!("{}.fasta.gz", args.output_prefix))?;
-        output_file.try_lock()?;
-
-        let writer: ParCompress<Mgzip, _> = ParCompressBuilder::new()
-            .compression_level(Compression::new(4))
-            .num_threads(num_cpus::get())?
-            .from_writer(std::io::BufWriter::with_capacity(
-                BUFWRITER_CAP,
-                output_file,
-            ));
-        Box::new(writer)
-    } else {
-        let output_file = std::fs::File::create(format!("{}.fasta", args.output_prefix))?;
-        output_file.try_lock()?;
-        Box::new(std::io::BufWriter::with_capacity(
-            BUFWRITER_CAP,
-            output_file,
-        ))
-    };
-
-    let mut header_writer: Box<dyn Write> = {
-        let file = std::fs::File::create(format!("{}_headers.txt", args.output_prefix))?;
-        file.try_lock()?;
-        Box::new(std::io::BufWriter::with_capacity(BUFWRITER_CAP, file))
-    };
+    let mut writer = DatabaseWriter::new(args.output_prefix, args.gzip_fasta, args.chunksize)?;
 
     for input in args.inputs {
         let mut iterator = AssemblyDirIterator::new(input)?;
@@ -209,7 +307,6 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
             process_metadata_fasta(
                 *taxid,
                 fasta.as_str(),
-                &mut header_writer,
                 &mut writer,
                 &mut seen,
                 args.min_len,
@@ -223,7 +320,6 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
         process_metadata_fasta(
             0,
             file,
-            &mut header_writer,
             &mut writer,
             &mut seen,
             args.min_len,
@@ -232,8 +328,71 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
         )?;
     }
 
-    header_writer.flush()?;
     writer.flush()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BuildDbArgs, DatabaseWriter, parse_chunksize};
+    use clap::Parser;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn parses_strict_chunksizes() {
+        assert_eq!(parse_chunksize("1K"), Ok(1024));
+        assert_eq!(parse_chunksize("12M"), Ok(12 * 1024 * 1024));
+        assert_eq!(parse_chunksize("2G"), Ok(2 * 1024 * 1024 * 1024));
+
+        for invalid in ["", "0K", "1", "1k", "1KB", "1.5M", "+1M", " 1M"] {
+            assert!(parse_chunksize(invalid).is_err(), "accepted {invalid:?}");
+        }
+    }
+
+    #[test]
+    fn clap_rejects_an_invalid_chunksize() {
+        assert!(
+            BuildDbArgs::try_parse_from(["build-db", "-o", "db", "--chunksize", "10MB"]).is_err()
+        );
+    }
+
+    #[test]
+    fn chunks_without_splitting_fasta_records() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("bamtax-build-db-{unique}"));
+        fs::create_dir(&root).unwrap();
+        let prefix = root.join("db").to_string_lossy().into_owned();
+        let mut writer = DatabaseWriter::new(prefix, false, Some(15)).unwrap();
+
+        writer.write_record("one", b"AAAA").unwrap();
+        writer.write_record("two", b"CCCC").unwrap();
+        writer.write_record("oversized", b"GGGGGGGGGG").unwrap();
+        writer.flush().unwrap();
+        drop(writer);
+
+        assert_eq!(
+            fs::read_to_string(root.join("db.1.fasta")).unwrap(),
+            ">one\nAAAA\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("db.2.fasta")).unwrap(),
+            ">two\nCCCC\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("db.3.fasta")).unwrap(),
+            ">oversized\nGGGGGGGGGG\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("db_headers.txt")).unwrap(),
+            "one\ntwo\noversized\n"
+        );
+        assert!(!root.join("db.1_headers.txt").exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
