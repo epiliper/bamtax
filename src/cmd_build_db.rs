@@ -2,7 +2,7 @@
 //! from one or more directories of downloaded NCBI assemblies.
 #![allow(clippy::unused_io_amount)]
 
-use crate::assembly_dir_iterator::AssemblyDirIterator;
+use crate::assembly_dir_iterator::{AssemblyDirIterator, file_name};
 use crate::cmd_cluster::taxid_from_id_str;
 use anyhow::{Context, Error};
 use clap::Parser;
@@ -317,15 +317,43 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
     }
 
     for file in &args.reheadered_fastas {
-        process_metadata_fasta(
-            0,
-            file,
-            &mut writer,
-            &mut seen,
-            args.min_len,
-            args.max_frac_ambig,
-            true,
-        )?;
+        if Path::new(file).is_file() {
+            process_metadata_fasta(
+                0,
+                file,
+                &mut writer,
+                &mut seen,
+                args.min_len,
+                args.max_frac_ambig,
+                true,
+            )?;
+        } else {
+            let entries = Path::new(file)
+                .read_dir()
+                .with_context(|| format!("error reading dir {}", file))?;
+
+            for f in entries {
+                let f = f?;
+                if let Some(fname) = file_name(&f.path())? {
+                    if !fname.contains(".fna")
+                        && !fname.contains(".fa")
+                        && !fname.contains(".fasta")
+                    {
+                        continue;
+                    }
+
+                    process_metadata_fasta(
+                        0,
+                        fname,
+                        &mut writer,
+                        &mut seen,
+                        args.min_len,
+                        args.max_frac_ambig,
+                        true,
+                    )?;
+                }
+            }
+        }
     }
 
     writer.flush()?;

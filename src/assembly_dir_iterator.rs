@@ -65,7 +65,7 @@ fn is_assembly_dir(path: &Path) -> Result<bool, Error> {
     Ok(file_name(path)?.is_some_and(|name| name.starts_with("GCF_") || name.starts_with("GCA_")))
 }
 
-fn file_name(p: &Path) -> Result<Option<&str>, Error> {
+pub fn file_name(p: &Path) -> Result<Option<&str>, Error> {
     p.file_name()
         .map(|fname| {
             fname
