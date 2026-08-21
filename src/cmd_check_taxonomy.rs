@@ -78,11 +78,8 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
 
     while ref_reader.read_line(&mut line)? > 0 {
         let l = line.trim();
-        let tid = l
-            .split_once("|taxid:")
-            .map(|(_, l)| taxid_from_id_str(l))
-            .with_context(|| format!("invalid taxon id in {}: {}", &args.database_headers, line))
-            .flatten()?;
+        let tid = taxid_from_id_str(l)
+            .with_context(|| format!("invalid taxon id in {}: {}", &args.database_headers, line))?;
 
         // taxonomy.descendants(tid).flatten().for_each(|t| {
         //     count += 1;

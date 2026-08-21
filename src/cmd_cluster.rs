@@ -93,15 +93,19 @@ pub fn filter_read(
 
 #[inline(always)]
 pub fn taxid_from_id_str(id: &str) -> Result<u32, Error> {
-    let digits = id
-        .bytes()
-        .take_while(|b| b.is_ascii_digit())
-        .collect::<Vec<u8>>();
+    if let Some((_header, meta)) = id.split_once("|taxid:") {
+        let digits = meta
+            .bytes()
+            .take_while(|b| b.is_ascii_digit())
+            .collect::<Vec<u8>>();
 
-    std::str::from_utf8(&digits)
-        .expect("invalid taxid string")
-        .parse::<u32>()
-        .map_err(|e| anyhow::anyhow!(e))
+        std::str::from_utf8(&digits)
+            .expect("invalid taxid string")
+            .parse::<u32>()
+            .map_err(|e| anyhow::anyhow!(e))
+    } else {
+        anyhow::bail!("No taxid pattern in id {}", id)
+    }
 }
 
 fn record_get_taxid(tnames: &[Vec<u8>], rec: &Record) -> Result<u32, Error> {
@@ -110,11 +114,7 @@ fn record_get_taxid(tnames: &[Vec<u8>], rec: &Record) -> Result<u32, Error> {
         .with_context(|| format!("Invalid TID {} not in header", rec.tid()))
         .map(|bytes| std::str::from_utf8(bytes).unwrap())?;
 
-    if let Some((_header, meta)) = tname.split_once("|taxid:") {
-        taxid_from_id_str(meta)
-    } else {
-        anyhow::bail!("no taxid pattern in read header!");
-    }
+    taxid_from_id_str(tname).with_context(|| format!("Header: {tname}"))
 }
 
 fn is_broken_pipe(error: &Error) -> bool {

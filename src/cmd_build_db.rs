@@ -34,6 +34,9 @@ pub struct BuildDbArgs {
     #[arg(short = 'n', long, default_value_t = 0.30)]
     pub max_frac_ambig: f32,
 
+    #[arg(short, long = "max_seq_len", default_value_t = 500_000_000)]
+    pub max_len: u64,
+
     #[arg(short = 't', long, num_args = 1..)]
     pub assembly_to_taxid_map: Vec<String>,
 
@@ -41,7 +44,7 @@ pub struct BuildDbArgs {
     pub gzip_fasta: bool,
 
     #[arg(short = 'l', long, default_value_t = 100)]
-    pub min_len: usize,
+    pub min_len: u64,
 
     /// Approximate uncompressed FASTA size per chunk (for example, 500M)
     #[arg(long, value_parser = parse_chunksize)]
@@ -181,7 +184,7 @@ fn base_is_nonambig(base: u8) -> bool {
     b == b'A' || b == b'C' || b == b'G' || b == b'T'
 }
 
-fn seq_n_bases_ambig_and_total(seq: &[u8]) -> (usize, usize) {
+fn seq_n_bases_ambig_and_total(seq: &[u8]) -> (u64, u64) {
     let mut ambig = 0;
     let mut total = 0;
 
@@ -233,7 +236,8 @@ fn process_metadata_fasta(
     fasta: &str,
     writer: &mut DatabaseWriter,
     seen_records: &mut HashSet<String>,
-    min_len: usize,
+    min_len: u64,
+    max_len: u64,
     max_frac_ambig: f32,
     headers_already_changed: bool,
 ) -> Result<(), Error> {
@@ -244,6 +248,8 @@ fn process_metadata_fasta(
     };
 
     let mut reader = FastaReader::new(BufReader::new(reader));
+
+    eprintln!("Processing file {fasta}");
 
     while let Some(rec) = reader.next() {
         let rec = rec?;
@@ -261,6 +267,11 @@ fn process_metadata_fasta(
                 "skipping sequence {id}: failed filters. Length: {}. Fraction of sequence ambiguous: {}",
                 total, frac_ambig
             );
+            continue;
+        }
+
+        if total > max_len {
+            eprintln!("skipping seuqence {id}: too long! {total} > {max_len}");
             continue;
         }
 
@@ -290,31 +301,12 @@ fn process_metadata_fasta(
 }
 
 pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
+    eprintln!("filtering sequences to be no longer than {}", args.max_len);
     let mut seen: HashSet<String> = HashSet::new();
 
     let assembly_tid_map = construct_assembly_to_tid_db(&args.assembly_to_taxid_map)?;
 
     let mut writer = DatabaseWriter::new(args.output_prefix, args.gzip_fasta, args.chunksize)?;
-
-    for input in args.inputs {
-        let mut iterator = AssemblyDirIterator::new(input)?;
-
-        while let Some((assembly, fasta)) = iterator.next_item()? {
-            let taxid = assembly_tid_map.get(&assembly).with_context(|| {
-                format!("Assembly {assembly} not found in assembly to taxon id map!")
-            })?;
-
-            process_metadata_fasta(
-                *taxid,
-                fasta.as_str(),
-                &mut writer,
-                &mut seen,
-                args.min_len,
-                args.max_frac_ambig,
-                false,
-            )?;
-        }
-    }
 
     for file in &args.reheadered_fastas {
         if Path::new(file).is_file() {
@@ -324,6 +316,7 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
                 &mut writer,
                 &mut seen,
                 args.min_len,
+                args.max_len,
                 args.max_frac_ambig,
                 true,
             )?;
@@ -344,15 +337,37 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
 
                     process_metadata_fasta(
                         0,
-                        fname,
+                        f.path().to_str().unwrap(),
                         &mut writer,
                         &mut seen,
                         args.min_len,
+                        args.max_len,
                         args.max_frac_ambig,
                         true,
                     )?;
                 }
             }
+        }
+    }
+
+    for input in args.inputs {
+        let mut iterator = AssemblyDirIterator::new(input)?;
+
+        while let Some((assembly, fasta)) = iterator.next_item()? {
+            let taxid = assembly_tid_map.get(&assembly).with_context(|| {
+                format!("Assembly {assembly} not found in assembly to taxon id map!")
+            })?;
+
+            process_metadata_fasta(
+                *taxid,
+                fasta.as_str(),
+                &mut writer,
+                &mut seen,
+                args.min_len,
+                args.max_len,
+                args.max_frac_ambig,
+                false,
+            )?;
         }
     }
 
