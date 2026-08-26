@@ -3,6 +3,7 @@ pub mod cmd_build_db;
 pub mod cmd_check_taxonomy;
 pub mod cmd_cluster;
 pub mod cmd_emit_read_names;
+pub mod cmd_fasta_to_blastdb;
 mod locus_tracker;
 pub mod taxonomy;
 
@@ -11,6 +12,7 @@ use cmd_build_db::{BuildDbArgs, build_db_main};
 use cmd_check_taxonomy::{CheckTaxonomyArgs, check_taxonomy_main};
 use cmd_cluster::{ClusterArgs, cluster_main};
 use cmd_emit_read_names::{EmitNamesArgs, emit_names_main};
+use cmd_fasta_to_blastdb::{FastaToBlastDBArgs, fasta_to_blastdb_main};
 
 #[derive(Subcommand)]
 enum Commands {
@@ -18,6 +20,7 @@ enum Commands {
     Names(EmitNamesArgs),
     TaxonCheck(CheckTaxonomyArgs),
     BuildDb(BuildDbArgs),
+    FastaToBlastDB(FastaToBlastDBArgs),
 }
 
 #[derive(Parser)]
@@ -34,9 +37,9 @@ pub fn main() {
         Commands::Names(args) => emit_names_main(args),
         Commands::TaxonCheck(args) => check_taxonomy_main(args),
         Commands::BuildDb(args) => build_db_main(args),
+        Commands::FastaToBlastDB(args) => fasta_to_blastdb_main(args)
     };
 
-    // result.unwrap();
     if let Err(e) = result {
         eprintln!("Error: {e}");
         std::process::exit(1);

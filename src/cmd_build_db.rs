@@ -18,7 +18,7 @@ use gzp::{
 
 use flate2::read::GzDecoder;
 
-const BUFWRITER_CAP: usize = 200 * 1024 * 1024;
+pub const BUFWRITER_CAP: usize = 200 * 1024 * 1024;
 
 #[derive(Parser)]
 pub struct BuildDbArgs {
@@ -77,7 +77,7 @@ fn parse_chunksize(value: &str) -> Result<u64, String> {
         .ok_or_else(|| "chunk size is too large".to_string())
 }
 
-struct DatabaseWriter {
+pub struct DatabaseWriter {
     output_prefix: String,
     gzip_fasta: bool,
     chunksize: Option<u64>,
@@ -109,7 +109,7 @@ impl DatabaseWriter {
         })
     }
 
-    fn create_fasta_writer(
+    pub fn create_fasta_writer(
         output_prefix: &str,
         gzip_fasta: bool,
         chunk_number: Option<u64>,
@@ -139,7 +139,7 @@ impl DatabaseWriter {
         }
     }
 
-    fn write_record(&mut self, id: &str, seq: &[u8]) -> Result<(), Error> {
+    pub fn write_record(&mut self, id: &str, seq: &[u8]) -> Result<(), Error> {
         let record_bytes = 1_u64
             .checked_add(id.len() as u64)
             .and_then(|size| size.checked_add(1))
