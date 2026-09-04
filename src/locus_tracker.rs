@@ -44,6 +44,7 @@ impl AlignmentReport {
                 .iter()
                 .map(|tid| String::from_utf8_lossy(header.tid2name(*tid as u32)).into_owned())
                 .collect();
+
             references.sort();
 
             writer.serialize(AlignmentReportRow {

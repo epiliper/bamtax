@@ -2,10 +2,13 @@
 use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Error};
 use clap::Parser;
-use rust_htslib::bam::{IndexedReader, Read, Record, ext::BamRecordExtensions, record::Cigar};
+use rust_htslib::bam::{
+    HeaderView, IndexedReader, Read, Reader, Record, ext::BamRecordExtensions, record::Cigar,
+};
 use std::fs::File;
 use std::io::{self, Write};
 
+use crate::cmd_build_db::base_is_nonambig;
 use crate::locus_tracker::LocusTracker;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +62,7 @@ pub fn parse_delimiter(value: &str) -> Result<u8, String> {
     }
 }
 
+#[inline(always)]
 pub fn filter_read(
     rec: &Record,
     min_frac_bases_aligned: f32,
@@ -70,6 +74,8 @@ pub fn filter_read(
     let len = rec.seq_len();
     let mina = (min_frac_bases_aligned * len as f32) as usize;
     let minm = (min_frac_bases_matched * len as f32) as usize;
+    let seq = rec.seq();
+    let mut seqi: usize = 0;
 
     for op in &rec.cigar().0 {
         match op {
@@ -78,11 +84,24 @@ pub fn filter_read(
             }
 
             Cigar::Equal(len) => {
-                bases_aligned += *len as usize;
-                bases_matched += *len as usize
+                for i in seqi..seqi + (*len as usize) {
+                    if base_is_nonambig(seq[i]) {
+                        bases_matched += 1;
+                    }
+
+                    bases_aligned += 1;
+                }
+                seqi += *len as usize;
             }
 
-            Cigar::Diff(len) => bases_aligned += *len as usize,
+            Cigar::Diff(len) => {
+                bases_aligned += *len as usize;
+                seqi += *len as usize;
+            }
+
+            Cigar::RefSkip(len) | Cigar::Del(len) => {
+                seqi += *len as usize;
+            }
 
             _ => (),
         }
@@ -108,11 +127,8 @@ pub fn taxid_from_id_str(id: &str) -> Result<u32, Error> {
     }
 }
 
-fn record_get_taxid(tnames: &[Vec<u8>], rec: &Record) -> Result<u32, Error> {
-    let tname = tnames
-        .get(rec.tid() as usize)
-        .with_context(|| format!("Invalid TID {} not in header", rec.tid()))
-        .map(|bytes| std::str::from_utf8(bytes).unwrap())?;
+fn record_get_taxid(header: &HeaderView, rec: &Record) -> Result<u32, Error> {
+    let tname = std::str::from_utf8(tid2name(header, rec.tid())?)?;
 
     taxid_from_id_str(tname).with_context(|| format!("Header: {tname}"))
 }
@@ -131,6 +147,21 @@ fn is_broken_pipe(error: &Error) -> bool {
     })
 }
 
+pub fn tid2name(header: &HeaderView, tid: i32) -> Result<&[u8], Error> {
+    Ok(header.tid2name(u32::try_from(tid)?))
+}
+
+fn cursory_header_equivalence_check(
+    other: &HeaderView,
+    headerfirst: &[u8],
+    headerlast: &[u8],
+    targetcount: u32,
+) -> Result<bool, Error> {
+    Ok(other.target_count() == targetcount
+        && tid2name(other, 0)? == headerfirst
+        && tid2name(other, i32::try_from(targetcount.saturating_sub(1))?)? == headerlast)
+}
+
 pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
     let mut taxonomy = Taxonomy::from_dir(&args.taxonomy_dir).context("create taxonomy")?;
     let to_stdout = args.output == "-";
@@ -144,6 +175,16 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         .delimiter(args.delimiter)
         .from_writer(output);
 
+    // we expect headers across all input files to match. We just grab the first one.
+    let header = Reader::from_path(&args.inputs[0])
+        .expect("create header sample reader")
+        .header()
+        .clone();
+
+    let headercount = header.target_count();
+    let headerfirst = tid2name(&header, 0)?;
+    let headerlast = tid2name(&header, i32::try_from(headercount)?.saturating_sub(1))?;
+
     for input in &args.inputs {
         let mut lt = LocusTracker::new();
 
@@ -152,9 +193,13 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         reader.set_threads(4).context("set reader threads")?;
         reader.fetch(".").context("fetch everything")?;
 
-        let mut tnames: Vec<Vec<u8>> = Vec::with_capacity(reader.header().target_count() as usize);
-        for name in reader.header().target_names() {
-            tnames.push(name.to_vec());
+        if !cursory_header_equivalence_check(reader.header(), headerfirst, headerlast, headercount)?
+        {
+            anyhow::bail!(
+                "File {} has a different header from the first input file {}! All BAM headers should be the same.",
+                input,
+                &args.inputs[0],
+            )
         }
 
         let basename = input.rsplit_once(".").unwrap_or((input, "")).0;
@@ -183,7 +228,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
             if filter_read(&rec, args.min_frac_read_aligned, args.min_frac_read_matched)
                 .context("filter record")?
             {
-                let taxid = record_get_taxid(&tnames, &rec).expect("get read taxid");
+                let taxid = record_get_taxid(&header, &rec).expect("get read taxid");
                 if let Some(species) = taxonomy.species(taxid) {
                     seq_len += rec.seq_len();
                     n_passed += 1;
@@ -204,7 +249,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
 
                     failed_read_writer.write(rec.qname())?;
                     failed_read_writer.write(b"\t")?;
-                    failed_read_writer.write(&tnames[rec.tid() as usize])?;
+                    failed_read_writer.write(tid2name(&header, rec.tid())?)?;
                     failed_read_writer.write(b"\n")?;
                 }
             }

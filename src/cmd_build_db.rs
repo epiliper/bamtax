@@ -179,7 +179,7 @@ impl DatabaseWriter {
 }
 
 #[inline(always)]
-fn base_is_nonambig(base: u8) -> bool {
+pub fn base_is_nonambig(base: u8) -> bool {
     let b = base.to_ascii_uppercase();
     b == b'A' || b == b'C' || b == b'G' || b == b'T'
 }
