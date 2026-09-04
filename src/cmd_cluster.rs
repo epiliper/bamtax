@@ -99,7 +99,7 @@ pub fn filter_read(
                 seqi += *len as usize;
             }
 
-            Cigar::RefSkip(len) | Cigar::Del(len) => {
+            Cigar::Ins(len) | Cigar::SoftClip(len) | Cigar::Pad(len) => {
                 seqi += *len as usize;
             }
 
