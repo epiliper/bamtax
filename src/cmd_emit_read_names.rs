@@ -1,5 +1,5 @@
 #![allow(clippy::unused_io_amount)]
-use crate::cmd_cluster::filter_read;
+use crate::filter_read::filter_read;
 use anyhow::Error;
 use clap::Parser;
 use rust_htslib::bam::{Read, Reader, Record};

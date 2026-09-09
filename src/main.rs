@@ -5,6 +5,7 @@ pub mod cmd_cluster;
 pub mod cmd_emit_read_names;
 mod locus_tracker;
 pub mod taxonomy;
+mod filter_read;
 
 use clap::{Parser, Subcommand};
 use cmd_build_db::{BuildDbArgs, build_db_main};
