@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
-pub struct DownloadArgs {
+pub struct DownloadAccessionsArgs {
     /// File of taxon IDs, should be one per line.
     #[arg(short = 'i', long)]
     input: String,
@@ -61,7 +61,7 @@ impl NCBIRequestTracker {
 }
 
 
-pub fn download_genomes_for_taxid(taxid: u32, tracker: &mut NCBIRequestTracker, api_key: &str) -> Result<Vec<u8>, Error> {
+pub fn download_accs_for_taxid(taxid: u32, tracker: &mut NCBIRequestTracker, api_key: &str) -> Result<Vec<u8>, Error> {
     tracker.tick();
     let search = Command::new("esearch").stdout(Stdio::piped()).args(["-db", "nucleotide", "-query", &nucleotide_query(taxid)]).env("NCBI_API_KEY", api_key).spawn()?; 
 
@@ -74,7 +74,7 @@ pub fn download_genomes_for_taxid(taxid: u32, tracker: &mut NCBIRequestTracker, 
     Ok(fetch.stdout)
 }
 
-pub fn download_main(args: DownloadArgs) -> Result<(), Error> {
+pub fn download_accs_main(args: DownloadAccessionsArgs) -> Result<(), Error> {
     let (totallines, input): (usize, Box<dyn Read>) =
         (BufReader::new(open_file_reader(&args.input)?).lines().count(), open_file_reader(&args.input)?);
 
@@ -110,15 +110,23 @@ pub fn download_main(args: DownloadArgs) -> Result<(), Error> {
 
         if let Some(species) = taxo.species(tid) && !blacklist.contains(&species.tax_id) && !seen.contains(&tid) {
             seen.insert(tid);
+            let tidstr = tid.to_string();
 
-            if let Ok(bytes) = download_genomes_for_taxid(tid, &mut tracker, &args.api_key) {
-                writer.write(&bytes)?;
-            }         
+            if let Ok(bytes) = download_accs_for_taxid(tid, &mut tracker, &args.api_key) {
+                let output_lines = bytes.lines();
 
+                for o in output_lines {
+                    writer.write(tidstr.as_bytes())?;
+                    writer.write(b"\t")?;
+                    writer.write(o?.as_bytes())?;
+                    writer.write(b"\n")?;
+                }
+            } 
         }
 
-        eprint!("Processed {i} of {totallines} lines\r");
+        eprint!("Processed {} of {totallines} lines\r", i + 1);
     }
 
+    writer.flush()?;
     Ok(())
 }

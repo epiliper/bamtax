@@ -5,7 +5,8 @@ pub mod cmd_cluster;
 pub mod cmd_emit_read_names;
 pub mod cmd_fetch;
 pub mod cmd_report_species;
-pub mod cmd_download;
+pub mod cmd_download_accs;
+pub mod cmd_download_fastas;
 mod locus_tracker;
 pub mod taxonomy;
 mod filter_read;
@@ -17,7 +18,7 @@ use cmd_cluster::{ClusterArgs, cluster_main};
 use cmd_emit_read_names::{EmitNamesArgs, emit_names_main};
 use cmd_fetch::{FetchArgs, fetch_main};
 use cmd_report_species::{ReportSpeciesArgs, report_species_main};
-use cmd_download::{DownloadArgs, download_main};
+use cmd_download_accs::{DownloadAccessionsArgs, download_accs_main};
 
 #[derive(Subcommand)]
 enum Commands {
@@ -27,7 +28,7 @@ enum Commands {
     BuildDb(BuildDbArgs),
     Fetch(FetchArgs),
     ReportSpecies(ReportSpeciesArgs),
-    Download(DownloadArgs),
+    DownloadAccs(DownloadAccessionsArgs),
 }
 
 #[derive(Parser)]
@@ -46,7 +47,7 @@ pub fn main() {
         Commands::BuildDb(args) => build_db_main(args),
         Commands::Fetch(args) => fetch_main(args),
         Commands::ReportSpecies(args) => report_species_main(args),
-        Commands::Download(args) => download_main(args),
+        Commands::DownloadAccs(args) => download_accs_main(args),
     };
 
     if let Err(e) = result {
