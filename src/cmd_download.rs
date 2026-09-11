@@ -1,16 +1,17 @@
 #![allow(clippy::unused_io_amount)]
 
 use clap::Parser;
-use std::io::{Read, Write, BufRead, BufReader};
+use std::io::{Read, Write, BufRead, BufReader, BufWriter};
 use anyhow::Error;
 use crate::{taxonomy::Taxonomy, cmd_report_species::open_file_reader};
 use std::process::{Command, Stdio};
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 #[derive(Parser)]
 pub struct DownloadArgs {
     /// File of taxon IDs, should be one per line.
-    #[arg(short = 'i', long, default_value_t = "-".to_string())]
+    #[arg(short = 'i', long)]
     input: String,
 
     #[arg(short = 'o', long, default_value_t = "-".to_string())]
@@ -32,24 +33,61 @@ fn nucleotide_query(taxid: u32) -> String {
     format!("txid{taxid}[Organism:exp] AND (\"complete genome\" OR \"partial genome\")")
 }
 
-pub fn download_genomes_for_taxid(taxid: u32) -> Result<Vec<u8>, Error> {
-    let search = Command::new("esearch").stdout(Stdio::piped()).args(["-db", "nucleotide", "-query", &nucleotide_query(taxid)]).spawn()?; 
-    let fetch = Command::new("efetch").stdin(search.stdout.unwrap()).args(["-format", "acc"]).output()?;
+// I need some state to track requests so we can sleep() to avoid the dreaded 429
+pub struct NCBIRequestTracker {
+    nrequests: usize,
+    time_last_clear: Instant,
+}
+
+impl NCBIRequestTracker {
+    // rps when an API key is used.
+    const NCBI_REQUESTS_PER_SECOND: usize = 10;
+    const COOLDOWN: Duration = Duration::from_secs(1);
+
+    #[inline(always)]
+    pub fn tick(&mut self) {
+        if self.time_last_clear >= Instant::now() - Self::COOLDOWN {
+            if self.nrequests >= Self::NCBI_REQUESTS_PER_SECOND {
+                std::thread::sleep(Self::COOLDOWN);
+            } 
+
+            self.nrequests = 0;
+            self.time_last_clear = Instant::now();
+
+        }
+
+        self.nrequests += 1;
+    }
+}
+
+
+pub fn download_genomes_for_taxid(taxid: u32, tracker: &mut NCBIRequestTracker, api_key: &str) -> Result<Vec<u8>, Error> {
+    tracker.tick();
+    let search = Command::new("esearch").stdout(Stdio::piped()).args(["-db", "nucleotide", "-query", &nucleotide_query(taxid)]).env("NCBI_API_KEY", api_key).spawn()?; 
+
+    tracker.tick();
+    let fetch = Command::new("efetch").stdin(search.stdout.unwrap()).args(["-format", "acc"]).env("NCBI_API_KEY", api_key).output()?;
     if !fetch.status.success() {
         eprintln!("error fetching for {taxid}: {}", std::str::from_utf8(&fetch.stderr)?);
     }
-    std::thread::sleep(std::time::Duration::from_secs(1));
+
     Ok(fetch.stdout)
 }
 
 pub fn download_main(args: DownloadArgs) -> Result<(), Error> {
-    let input: Box<dyn Read> = if args.input == "-" {
-        Box::new(std::io::stdin().lock())
-    } else {
-        open_file_reader(&args.input)?
-    };
+    let (totallines, input): (usize, Box<dyn Read>) =
+        (BufReader::new(open_file_reader(&args.input)?).lines().count(), open_file_reader(&args.input)?);
 
     let reader = BufReader::new(input);
+
+    let mut writer: BufWriter<Box<dyn Write>> = {
+        if args.output == "-" {
+            BufWriter::new(Box::new(std::io::stdout().lock()))
+        } else {
+            BufWriter::new(Box::new(std::fs::File::create(&args.output)?))
+        }
+    };
+
     let mut taxo = Taxonomy::from_dir(args.taxonomy_dir)?;
 
     let blacklist: HashSet<u32> = if let Some(blacklist) = args.species_blacklist {
@@ -59,19 +97,27 @@ pub fn download_main(args: DownloadArgs) -> Result<(), Error> {
         HashSet::new()
     };
 
-    // track refernce-level taxon ids to make sure we aren't doing repeated work
+    // track reference-level taxon ids to make sure we aren't doing repeated work
     let mut seen: HashSet<u32> = HashSet::new();
 
-    for line in reader.lines() {
+    let mut tracker = NCBIRequestTracker {
+        nrequests: 0,
+        time_last_clear: Instant::now(),
+    };
+
+    for (i, line) in reader.lines().enumerate() {
         let tid = line?.trim().parse::<u32>()?;
 
         if let Some(species) = taxo.species(tid) && !blacklist.contains(&species.tax_id) && !seen.contains(&tid) {
             seen.insert(tid);
 
-            let bytes = download_genomes_for_taxid(tid)?;
-            if bytes.is_empty() { continue; }
-            std::io::stdout().write(&bytes)?;
+            if let Ok(bytes) = download_genomes_for_taxid(tid, &mut tracker, &args.api_key) {
+                writer.write(&bytes)?;
+            }         
+
         }
+
+        eprint!("Processed {i} of {totallines} lines\r");
     }
 
     Ok(())
