@@ -6,6 +6,7 @@ use rust_htslib::bam::{Read, Reader, Record};
 use std::io::{BufWriter, Write};
 
 #[derive(Parser)]
+#[command(version, arg_required_else_help = true)]
 pub struct EmitNamesArgs {
     #[arg(short = 'i')]
     pub input: String,

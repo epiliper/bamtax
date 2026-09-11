@@ -26,6 +26,7 @@ impl Range {
 }
 
 #[derive(Parser)]
+#[command(version, arg_required_else_help = true)]
 pub struct ClusterArgs {
     #[arg(short = 'o', default_value = "-")]
     pub output: String,

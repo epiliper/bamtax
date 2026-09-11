@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 
 #[derive(Parser)]
+#[command(version, arg_required_else_help = true)]
 pub struct CheckTaxonomyArgs {
     /// taxon ID file to check for representatives in database, one per line
     #[arg(short = 'i')]

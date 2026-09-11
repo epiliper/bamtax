@@ -21,6 +21,7 @@ use flate2::read::GzDecoder;
 pub const BUFWRITER_CAP: usize = 200 * 1024 * 1024;
 
 #[derive(Parser)]
+#[command(version, arg_required_else_help = true)]
 pub struct BuildDbArgs {
     #[arg(short = 'i', long, num_args = 1..)]
     pub inputs: Vec<String>,
