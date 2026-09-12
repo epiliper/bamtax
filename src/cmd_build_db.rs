@@ -11,6 +11,13 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
+#[derive(Clone)]
+pub struct DBFilterArgs {
+    pub min_len: u32,
+    pub max_len: u32,
+    pub max_frac_ambig: f32,
+}
+
 use gzp::{
     deflate::Mgzip,
     par::compress::{Compression, ParCompress, ParCompressBuilder},
@@ -36,7 +43,7 @@ pub struct BuildDbArgs {
     pub max_frac_ambig: f32,
 
     #[arg(short, long = "max_seq_len", default_value_t = 500_000_000)]
-    pub max_len: u64,
+    pub max_len: u32,
 
     #[arg(short = 't', long, num_args = 1..)]
     pub assembly_to_taxid_map: Vec<String>,
@@ -45,7 +52,7 @@ pub struct BuildDbArgs {
     pub gzip_fasta: bool,
 
     #[arg(short = 'l', long, default_value_t = 100)]
-    pub min_len: u64,
+    pub min_len: u32,
 
     /// Approximate uncompressed FASTA size per chunk (for example, 500M)
     #[arg(long, value_parser = parse_chunksize)]
@@ -191,7 +198,7 @@ pub fn base_is_nonambig(base: u8) -> bool {
     b == b'A' || b == b'C' || b == b'G' || b == b'T'
 }
 
-fn seq_n_bases_ambig_and_total(seq: &[u8]) -> (u64, u64) {
+fn seq_n_bases_ambig_and_total(seq: &[u8]) -> (u32, u32) {
     let mut ambig = 0;
     let mut total = 0;
 
@@ -244,9 +251,7 @@ pub fn process_metadata_fasta<R: std::io::Read>(
     // fasta: &str,
     writer: &mut DatabaseWriter,
     seen_records: &mut HashSet<String>,
-    min_len: u64,
-    max_len: u64,
-    max_frac_ambig: f32,
+    filtargs: &DBFilterArgs,
     headers_already_changed: bool,
     gzip: bool,
 ) -> Result<(), Error> {
@@ -269,7 +274,7 @@ pub fn process_metadata_fasta<R: std::io::Read>(
         let (ambig, total) = seq_n_bases_ambig_and_total(rec.seq());
         let frac_ambig = ambig as f32 / total as f32;
 
-        if total < min_len || frac_ambig > max_frac_ambig {
+        if total < filtargs.min_len || frac_ambig > filtargs.max_frac_ambig {
             eprintln!(
                 "skipping sequence {id}: failed filters. Length: {}. Fraction of sequence ambiguous: {}",
                 total, frac_ambig
@@ -277,8 +282,11 @@ pub fn process_metadata_fasta<R: std::io::Read>(
             continue;
         }
 
-        if total > max_len {
-            eprintln!("skipping seuqence {id}: too long! {total} > {max_len}");
+        if total > filtargs.max_len {
+            eprintln!(
+                "skipping seuqence {id}: too long! {total} > {}",
+                filtargs.max_len
+            );
             continue;
         }
 
@@ -315,6 +323,12 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
 
     let mut writer = DatabaseWriter::new(args.output_prefix, args.gzip_fasta, args.chunksize)?;
 
+    let filtargs = DBFilterArgs {
+        min_len: args.min_len,
+        max_len: args.max_len,
+        max_frac_ambig: args.max_frac_ambig,
+    };
+
     for file in &args.reheadered_fastas {
         if Path::new(file).is_file() {
             process_metadata_fasta(
@@ -322,9 +336,7 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
                 std::fs::File::open(file)?,
                 &mut writer,
                 &mut seen,
-                args.min_len,
-                args.max_len,
-                args.max_frac_ambig,
+                &filtargs,
                 true,
                 file.ends_with(".gz"),
             )?;
@@ -348,9 +360,7 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
                         std::fs::File::open(f.path())?,
                         &mut writer,
                         &mut seen,
-                        args.min_len,
-                        args.max_len,
-                        args.max_frac_ambig,
+                        &filtargs,
                         true,
                         file_name(&f.path())?.unwrap().ends_with(".gz"),
                     )?;
@@ -372,9 +382,7 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
                 std::fs::File::open(&fasta)?,
                 &mut writer,
                 &mut seen,
-                args.min_len,
-                args.max_len,
-                args.max_frac_ambig,
+                &filtargs,
                 false,
                 fasta.ends_with(".gz"),
             )?;

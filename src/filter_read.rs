@@ -1,7 +1,6 @@
-
 use crate::cmd_build_db::base_is_nonambig;
-use rust_htslib::bam::record::{Record, Cigar, CigarString};
 use anyhow::Error;
+use rust_htslib::bam::record::{Cigar, Record};
 
 #[inline(always)]
 pub fn filter_read(
@@ -48,7 +47,10 @@ pub fn filter_read(
         }
     }
     #[cfg(test)]
-    eprintln!("bases matched: {} bases aligned: {}, total: {}", bases_matched, bases_aligned, len);
+    eprintln!(
+        "bases matched: {} bases aligned: {}, total: {}",
+        bases_matched, bases_aligned, len
+    );
 
     Ok(bases_aligned >= mina && bases_matched >= minm)
 }
@@ -56,6 +58,7 @@ pub fn filter_read(
 #[cfg(test)]
 mod test {
     use super::*;
+    use rust_htslib::bam::record::CigarString;
 
     #[test]
     fn test_filter_read1() {
@@ -63,8 +66,13 @@ mod test {
         let seq = "GGTCACTGTCNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNGACGGAGTCTCACTCTGTCGCCCAGGCTGGAGTGCA";
         let cigar = "1X3=1I5=52X2I2=1X33=";
         let qual = vec![40; seq.len()];
-        rec.set(b"test1", Some(&CigarString::try_from(cigar.as_bytes()).unwrap()), seq.as_bytes(), qual.as_slice());
+        rec.set(
+            b"test1",
+            Some(&CigarString::try_from(cigar.as_bytes()).unwrap()),
+            seq.as_bytes(),
+            qual.as_slice(),
+        );
 
-        assert_eq!(filter_read(&rec, 0.7, 0.7).unwrap(), false);
+        assert!(!filter_read(&rec, 0.7, 0.7).unwrap());
     }
 }

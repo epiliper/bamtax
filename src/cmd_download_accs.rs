@@ -57,9 +57,11 @@ impl NCBIRequestTracker {
 
         self.nrequests += 1;
     }
+}
 
+impl std::default::Default for NCBIRequestTracker {
     #[inline(always)]
-    pub fn default() -> Self {
+    fn default() -> Self {
         Self {
             nrequests: 0,
             time_last_clear: Instant::now(),

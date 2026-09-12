@@ -3,7 +3,7 @@ use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Error};
 use clap::Parser;
 use rust_htslib::bam::{
-    HeaderView, IndexedReader, Read, Reader, Record, ext::BamRecordExtensions, record::Cigar,
+    HeaderView, IndexedReader, Read, Reader, Record, ext::BamRecordExtensions,
 };
 use std::fs::File;
 use std::io::{self, Write};

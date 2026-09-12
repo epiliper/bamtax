@@ -1,11 +1,11 @@
 #![allow(clippy::unused_io_amount)]
 
-use crate::cmd_build_db::{DatabaseWriter, process_metadata_fasta};
+use crate::cmd_build_db::{DBFilterArgs, DatabaseWriter, process_metadata_fasta};
 use crate::cmd_download_accs::NCBIRequestTracker;
 use anyhow::Error;
 use clap::Parser;
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -23,10 +23,10 @@ pub struct DownloadFastasArgs {
     pub max_frac_ambig: f32,
 
     #[arg(short, long = "max_seq_len", default_value_t = 500_000_000)]
-    pub max_len: u64,
+    pub max_len: u32,
 
     #[arg(short = 'l', long, default_value_t = 100)]
-    pub min_len: u64,
+    pub min_len: u32,
 }
 
 fn download_fasta_thread(
@@ -34,11 +34,9 @@ fn download_fasta_thread(
     tid: u32,
     writer: Arc<Mutex<DatabaseWriter>>,
     seen: Arc<Mutex<HashSet<String>>>,
-    min_len: u64,
-    max_len: u64,
-    max_frac_ambig: f32,
+    args: DBFilterArgs,
 ) -> JoinHandle<()> {
-    let ret = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let fetch = Command::new("efetch")
             .args(["-db", "nucleotide", "-id", &acc, "-format", "fasta"])
             .output()
@@ -59,9 +57,7 @@ fn download_fasta_thread(
             fetch.stdout.as_slice(),
             lock,
             seen,
-            min_len,
-            max_len,
-            max_frac_ambig,
+            &args,
             false,
             false,
         )
@@ -80,9 +76,7 @@ fn download_fasta_thread(
         // lock.write(b"|").unwrap();
         // lock.write(second.as_bytes()).unwrap();
         // lock.write(b"\n").unwrap();
-    });
-
-    ret
+    })
 }
 
 pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
@@ -101,6 +95,12 @@ pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
     let mut tracker = NCBIRequestTracker::default();
     let seen: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
+    let args = DBFilterArgs {
+        min_len: args.min_len,
+        max_len: args.max_len,
+        max_frac_ambig: args.max_frac_ambig,
+    };
+
     for (i, line) in reader.lines().enumerate() {
         let l = line?;
         let (taxid, acc) = l.split_once("\t").unwrap();
@@ -112,9 +112,7 @@ pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
             taxid.parse::<u32>()?,
             Arc::clone(&output),
             Arc::clone(&seen),
-            args.min_len,
-            args.max_len,
-            args.max_frac_ambig,
+            args.clone(),
         );
 
         eprintln!("Processed {} of {input_lines}", i + 1);
