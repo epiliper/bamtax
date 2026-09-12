@@ -101,19 +101,28 @@ pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
         max_frac_ambig: args.max_frac_ambig,
     };
 
+    const MAX_THREADS: usize = 100;
+    let mut joins: Vec<JoinHandle<()>> = Vec::with_capacity(MAX_THREADS);
+
     for (i, line) in reader.lines().enumerate() {
         let l = line?;
         let (taxid, acc) = l.split_once("\t").unwrap();
 
         tracker.tick();
 
-        download_fasta_thread(
+        let join = download_fasta_thread(
             acc.to_string(),
             taxid.parse::<u32>()?,
             Arc::clone(&output),
             Arc::clone(&seen),
             args.clone(),
         );
+
+        joins.push(join);
+
+        if joins.len() >= MAX_THREADS {
+            joins.drain(..).for_each(|j| j.join().unwrap())
+        }
 
         eprintln!("Processed {} of {input_lines}", i + 1);
     }
