@@ -25,7 +25,7 @@ use gzp::{
 
 use flate2::read::MultiGzDecoder;
 
-pub const BUFWRITER_CAP: usize = 200 * 1024 * 1024;
+pub const BUFWRITER_CAP: usize = 10 * 1024 * 1024;
 
 #[derive(Parser)]
 #[command(version, arg_required_else_help = true)]

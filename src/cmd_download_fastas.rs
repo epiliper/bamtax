@@ -7,8 +7,143 @@ use clap::Parser;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::process::Command;
+use std::sync::Condvar;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+
+pub struct ThreadOutput {
+    fastabytes: Vec<u8>,
+    taxid: u32,
+}
+
+pub struct ThreadSignal {
+    n: Mutex<usize>,
+    c: Condvar,
+    jobs_done: AtomicUsize,
+}
+
+struct OutputThread {
+    handle: JoinHandle<()>,
+}
+
+impl OutputThread {
+    pub fn new(
+        mut output_writer: DatabaseWriter,
+        filtargs: DBFilterArgs,
+    ) -> (Self, Sender<ThreadOutput>) {
+        let (s, r): (Sender<ThreadOutput>, Receiver<ThreadOutput>) = channel();
+
+        let j = std::thread::spawn(move || {
+            let mut seen_records: HashSet<String> = HashSet::new();
+
+            while let Ok(data) = r.recv() {
+                process_metadata_fasta(
+                    data.taxid,
+                    data.fastabytes.as_slice(),
+                    &mut output_writer,
+                    &mut seen_records,
+                    &filtargs,
+                    false,
+                    false,
+                )
+                .unwrap();
+            }
+        });
+
+        (Self { handle: j }, s)
+    }
+}
+
+impl ThreadSignal {
+    pub fn wait_while(&self) {
+        let _l = self
+            .c
+            .wait_while(self.n.lock().unwrap(), |free| *free == 0)
+            .unwrap();
+    }
+
+    pub fn mark_running(&self) {
+        *self.n.lock().unwrap() -= 1;
+        self.c.notify_one();
+    }
+
+    pub fn mark_done(&self) {
+        *self.n.lock().unwrap() += 1;
+        self.c.notify_one();
+    }
+}
+
+struct Worker {
+    handle: Option<JoinHandle<()>>,
+    notify: Arc<ThreadSignal>,
+}
+
+impl Worker {
+    fn is_finished(&mut self) -> bool {
+        if let Some(ref handle) = self.handle {
+            if handle.is_finished() {
+                self.handle.take().unwrap().join().unwrap();
+                return true;
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn run(&mut self, acc: String, tid: u32, api_key: String, sender: Sender<ThreadOutput>) {
+        assert!(self.handle.is_none());
+        let notify = Arc::clone(&self.notify);
+        self.handle = Some(std::thread::spawn(move || {
+            notify.mark_running();
+            download_fasta_thread(acc, tid, api_key, sender);
+            notify.mark_done();
+            notify.jobs_done.fetch_add(1, Ordering::Relaxed);
+        }));
+    }
+}
+
+struct ThreadPool {
+    workers: Vec<Worker>,
+    notify: Arc<ThreadSignal>,
+}
+
+impl ThreadPool {
+    pub fn new(n_threads: usize) -> Self {
+        let notify = Arc::new(ThreadSignal {
+            n: Mutex::new(n_threads),
+            c: Condvar::new(),
+            jobs_done: AtomicUsize::new(0),
+        });
+
+        let mut s = Self {
+            notify,
+            workers: Vec::with_capacity(n_threads),
+        };
+
+        (0..n_threads).for_each(|_| {
+            s.workers.push(Worker {
+                handle: None,
+                notify: Arc::clone(&s.notify),
+            })
+        });
+
+        s
+    }
+
+    pub fn get_available(&mut self) -> Option<&mut Worker> {
+        self.notify.wait_while();
+        eprint!(
+            "Finished {} jobs so far...\r",
+            self.notify.jobs_done.load(Ordering::Relaxed)
+        );
+        self.workers
+            .iter_mut()
+            .find_map(|w| w.is_finished().then_some(w))
+    }
+}
 
 #[derive(Parser)]
 pub struct DownloadFastasArgs {
@@ -17,7 +152,10 @@ pub struct DownloadFastasArgs {
     input: String,
 
     #[arg(short = 'o', long, default_value_t = "-".to_string())]
-    output: String,
+    output_prefix: String,
+
+    #[arg(short, long = "gzip")]
+    gzip_output: bool,
 
     #[arg(short = 'n', long, default_value_t = 0.30)]
     pub max_frac_ambig: f32,
@@ -27,105 +165,71 @@ pub struct DownloadFastasArgs {
 
     #[arg(short = 'l', long, default_value_t = 100)]
     pub min_len: u32,
+
+    #[arg(short, long)]
+    pub api_key: String,
 }
 
-fn download_fasta_thread(
-    acc: String,
-    tid: u32,
-    writer: Arc<Mutex<DatabaseWriter>>,
-    seen: Arc<Mutex<HashSet<String>>>,
-    args: DBFilterArgs,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
-        let fetch = Command::new("efetch")
-            .args(["-db", "nucleotide", "-id", &acc, "-format", "fasta"])
-            .output()
-            .unwrap();
+fn download_fasta_thread(acc: String, tid: u32, api_key: String, sender: Sender<ThreadOutput>) {
+    let fetch = Command::new("efetch")
+        .args(["-db", "nucleotide", "-id", &acc, "-format", "fasta"])
+        .env("NCBI_API_KEY", api_key)
+        .output()
+        .unwrap();
 
-        if !fetch.status.success() {
-            eprintln!(
-                "Downloading for acc {acc} failed: {}",
-                std::str::from_utf8(&fetch.stderr).unwrap()
-            );
-        }
+    if !fetch.status.success() {
+        eprintln!(
+            "Downloading for acc {acc} failed: {}",
+            std::str::from_utf8(&fetch.stderr).unwrap()
+        );
+    }
 
-        let lock = &mut writer.lock().unwrap();
-        let seen = &mut seen.lock().unwrap();
-
-        process_metadata_fasta(
-            tid,
-            fetch.stdout.as_slice(),
-            lock,
-            seen,
-            &args,
-            false,
-            false,
-        )
-        .expect("processing fasta");
-
-        // // reheader
-        // let header = lines.next().unwrap().unwrap();
-        // assert!(header.starts_with(">"));
-
-        // let (first, second) = header.trim().split_once(" ").unwrap_or((&header, ""));
-        // let mut lock = writer.lock().unwrap();
-
-        // lock.write(first.as_bytes()).unwrap();
-        // lock.write(b"|").unwrap();
-        // lock.write(tid.as_bytes()).unwrap();
-        // lock.write(b"|").unwrap();
-        // lock.write(second.as_bytes()).unwrap();
-        // lock.write(b"\n").unwrap();
-    })
+    sender
+        .send(ThreadOutput {
+            fastabytes: fetch.stdout,
+            taxid: tid,
+        })
+        .unwrap()
 }
 
 pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
-    let input_lines = BufReader::new(std::fs::File::open(&args.input)?)
-        .lines()
-        .count();
-
     let reader = BufReader::new(std::fs::File::open(&args.input)?);
 
-    let output = Arc::new(Mutex::new(DatabaseWriter::new(
-        args.output.clone(),
-        args.output.ends_with(".gz"),
-        None,
-    )?));
+    let output = DatabaseWriter::new(args.output_prefix.clone(), args.gzip_output, None)?;
 
     let mut tracker = NCBIRequestTracker::default();
-    let seen: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
-    let args = DBFilterArgs {
+    let filtargs = DBFilterArgs {
         min_len: args.min_len,
         max_len: args.max_len,
         max_frac_ambig: args.max_frac_ambig,
     };
 
-    const MAX_THREADS: usize = 100;
-    let mut joins: Vec<JoinHandle<()>> = Vec::with_capacity(MAX_THREADS);
+    // spawn a thread to handle writes/validation
+    let (output, sender) = OutputThread::new(output, filtargs);
 
-    for (i, line) in reader.lines().enumerate() {
-        let l = line?;
-        let (taxid, acc) = l.split_once("\t").unwrap();
+    let mut input = reader.lines().peekable();
+    let mut threadpool = ThreadPool::new(128);
 
-        tracker.tick();
+    while input.peek().is_some() {
+        if let Some(worker) = threadpool.get_available() {
+            let line = input.next().unwrap()?;
 
-        let join = download_fasta_thread(
-            acc.to_string(),
-            taxid.parse::<u32>()?,
-            Arc::clone(&output),
-            Arc::clone(&seen),
-            args.clone(),
-        );
+            let (taxid, acc) = line.split_once("\t").unwrap();
+            tracker.tick();
 
-        joins.push(join);
-
-        if joins.len() >= MAX_THREADS {
-            joins.drain(..).for_each(|j| j.join().unwrap())
+            worker.run(
+                acc.to_string(),
+                taxid.parse::<u32>().unwrap(),
+                args.api_key.to_string(),
+                sender.clone(),
+            );
         }
-
-        eprintln!("Processed {} of {input_lines}", i + 1);
     }
+
+    threadpool.get_available();
+    std::mem::drop(sender);
+    output.handle.join().unwrap();
 
     Ok(())
 }

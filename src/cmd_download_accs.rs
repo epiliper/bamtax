@@ -46,9 +46,11 @@ impl NCBIRequestTracker {
 
     #[inline(always)]
     pub fn tick(&mut self) {
-        if self.time_last_clear >= Instant::now() - Self::COOLDOWN {
+        let one_second_ago = Instant::now() - Self::COOLDOWN;
+
+        if self.time_last_clear >= one_second_ago {
             if self.nrequests >= Self::NCBI_REQUESTS_PER_SECOND {
-                std::thread::sleep(Self::COOLDOWN);
+                std::thread::sleep(one_second_ago - self.time_last_clear);
             }
 
             self.nrequests = 0;
