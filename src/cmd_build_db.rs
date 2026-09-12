@@ -16,7 +16,7 @@ use gzp::{
     par::compress::{Compression, ParCompress, ParCompressBuilder},
 };
 
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 
 pub const BUFWRITER_CAP: usize = 200 * 1024 * 1024;
 
@@ -88,8 +88,14 @@ pub struct DatabaseWriter {
     header_writer: Box<dyn Write>,
 }
 
+unsafe impl Send for DatabaseWriter {}
+
 impl DatabaseWriter {
-    fn new(output_prefix: String, gzip_fasta: bool, chunksize: Option<u64>) -> Result<Self, Error> {
+    pub fn new(
+        output_prefix: String,
+        gzip_fasta: bool,
+        chunksize: Option<u64>,
+    ) -> Result<Self, Error> {
         let chunk_number = u64::from(chunksize.is_some());
         let fasta_writer =
             Self::create_fasta_writer(&output_prefix, gzip_fasta, chunksize.map(|_| chunk_number))?;
@@ -232,25 +238,25 @@ fn construct_assembly_to_tid_db<P: AsRef<Path>>(
 }
 
 #[inline(always)]
-fn process_metadata_fasta(
+pub fn process_metadata_fasta<R: std::io::Read>(
     taxid: u32,
-    fasta: &str,
+    fasta: R,
+    // fasta: &str,
     writer: &mut DatabaseWriter,
     seen_records: &mut HashSet<String>,
     min_len: u64,
     max_len: u64,
     max_frac_ambig: f32,
     headers_already_changed: bool,
+    gzip: bool,
 ) -> Result<(), Error> {
-    let reader: Box<dyn std::io::Read> = if fasta.ends_with(".gz") {
-        Box::new(GzDecoder::new(std::fs::File::open(fasta)?))
+    let inner: Box<dyn std::io::Read> = if gzip {
+        Box::new(MultiGzDecoder::new(fasta))
     } else {
-        Box::new(std::fs::File::open(fasta)?)
+        Box::new(fasta)
     };
 
-    let mut reader = FastaReader::new(BufReader::new(reader));
-
-    eprintln!("Processing file {fasta}");
+    let mut reader = FastaReader::new(BufReader::new(inner));
 
     while let Some(rec) = reader.next() {
         let rec = rec?;
@@ -313,13 +319,14 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
         if Path::new(file).is_file() {
             process_metadata_fasta(
                 0,
-                file,
+                std::fs::File::open(file)?,
                 &mut writer,
                 &mut seen,
                 args.min_len,
                 args.max_len,
                 args.max_frac_ambig,
                 true,
+                file.ends_with(".gz"),
             )?;
         } else {
             let entries = Path::new(file)
@@ -338,13 +345,14 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
 
                     process_metadata_fasta(
                         0,
-                        f.path().to_str().unwrap(),
+                        std::fs::File::open(f.path())?,
                         &mut writer,
                         &mut seen,
                         args.min_len,
                         args.max_len,
                         args.max_frac_ambig,
                         true,
+                        file_name(&f.path())?.unwrap().ends_with(".gz"),
                     )?;
                 }
             }
@@ -361,13 +369,14 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
 
             process_metadata_fasta(
                 *taxid,
-                fasta.as_str(),
+                std::fs::File::open(&fasta)?,
                 &mut writer,
                 &mut seen,
                 args.min_len,
                 args.max_len,
                 args.max_frac_ambig,
                 false,
+                fasta.ends_with(".gz"),
             )?;
         }
     }

@@ -1,11 +1,11 @@
 #![allow(clippy::unused_io_amount)]
 
-use clap::Parser;
-use std::io::{Read, Write, BufRead, BufReader, BufWriter};
+use crate::{cmd_report_species::open_file_reader, taxonomy::Taxonomy};
 use anyhow::Error;
-use crate::{taxonomy::Taxonomy, cmd_report_species::open_file_reader};
-use std::process::{Command, Stdio};
+use clap::Parser;
 use std::collections::HashSet;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
@@ -49,34 +49,59 @@ impl NCBIRequestTracker {
         if self.time_last_clear >= Instant::now() - Self::COOLDOWN {
             if self.nrequests >= Self::NCBI_REQUESTS_PER_SECOND {
                 std::thread::sleep(Self::COOLDOWN);
-            } 
+            }
 
             self.nrequests = 0;
             self.time_last_clear = Instant::now();
-
         }
 
         self.nrequests += 1;
     }
+
+    #[inline(always)]
+    pub fn default() -> Self {
+        Self {
+            nrequests: 0,
+            time_last_clear: Instant::now(),
+        }
+    }
 }
 
-
-pub fn download_accs_for_taxid(taxid: u32, tracker: &mut NCBIRequestTracker, api_key: &str) -> Result<Vec<u8>, Error> {
+pub fn download_accs_for_taxid(
+    taxid: u32,
+    tracker: &mut NCBIRequestTracker,
+    api_key: &str,
+) -> Result<Vec<u8>, Error> {
     tracker.tick();
-    let search = Command::new("esearch").stdout(Stdio::piped()).args(["-db", "nucleotide", "-query", &nucleotide_query(taxid)]).env("NCBI_API_KEY", api_key).spawn()?; 
+    let search = Command::new("esearch")
+        .stdout(Stdio::piped())
+        .args(["-db", "nucleotide", "-query", &nucleotide_query(taxid)])
+        .env("NCBI_API_KEY", api_key)
+        .spawn()?;
 
     tracker.tick();
-    let fetch = Command::new("efetch").stdin(search.stdout.unwrap()).args(["-format", "acc"]).env("NCBI_API_KEY", api_key).output()?;
+    let fetch = Command::new("efetch")
+        .stdin(search.stdout.unwrap())
+        .args(["-format", "acc"])
+        .env("NCBI_API_KEY", api_key)
+        .output()?;
     if !fetch.status.success() {
-        eprintln!("error fetching for {taxid}: {}", std::str::from_utf8(&fetch.stderr)?);
+        eprintln!(
+            "error fetching for {taxid}: {}",
+            std::str::from_utf8(&fetch.stderr)?
+        );
     }
 
     Ok(fetch.stdout)
 }
 
 pub fn download_accs_main(args: DownloadAccessionsArgs) -> Result<(), Error> {
-    let (totallines, input): (usize, Box<dyn Read>) =
-        (BufReader::new(open_file_reader(&args.input)?).lines().count(), open_file_reader(&args.input)?);
+    let (totallines, input): (usize, Box<dyn Read>) = (
+        BufReader::new(open_file_reader(&args.input)?)
+            .lines()
+            .count(),
+        open_file_reader(&args.input)?,
+    );
 
     let reader = BufReader::new(input);
 
@@ -91,7 +116,9 @@ pub fn download_accs_main(args: DownloadAccessionsArgs) -> Result<(), Error> {
     let mut taxo = Taxonomy::from_dir(args.taxonomy_dir)?;
 
     let blacklist: HashSet<u32> = if let Some(blacklist) = args.species_blacklist {
-        let iter = BufReader::new(std::fs::File::open(blacklist)?).lines().map(|l| l.unwrap().trim().parse::<u32>().unwrap());
+        let iter = BufReader::new(std::fs::File::open(blacklist)?)
+            .lines()
+            .map(|l| l.unwrap().trim().parse::<u32>().unwrap());
         HashSet::from_iter(iter)
     } else {
         HashSet::new()
@@ -108,7 +135,10 @@ pub fn download_accs_main(args: DownloadAccessionsArgs) -> Result<(), Error> {
     for (i, line) in reader.lines().enumerate() {
         let tid = line?.trim().parse::<u32>()?;
 
-        if let Some(species) = taxo.species(tid) && !blacklist.contains(&species.tax_id) && !seen.contains(&tid) {
+        if let Some(species) = taxo.species(tid)
+            && !blacklist.contains(&species.tax_id)
+            && !seen.contains(&tid)
+        {
             seen.insert(tid);
             let tidstr = tid.to_string();
 
@@ -121,7 +151,7 @@ pub fn download_accs_main(args: DownloadAccessionsArgs) -> Result<(), Error> {
                     writer.write(o?.as_bytes())?;
                     writer.write(b"\n")?;
                 }
-            } 
+            }
         }
 
         eprint!("Processed {} of {totallines} lines\r", i + 1);

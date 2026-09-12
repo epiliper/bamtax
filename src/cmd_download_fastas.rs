@@ -1,11 +1,14 @@
 #![allow(clippy::unused_io_amount)]
 
-use clap::Parser;
+use crate::cmd_build_db::{DatabaseWriter, process_metadata_fasta};
 use crate::cmd_download_accs::NCBIRequestTracker;
-use std::io::{BufRead, BufWriter, BufReader, Read, Write};
 use anyhow::Error;
+use clap::Parser;
+use std::collections::HashSet;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 #[derive(Parser)]
 pub struct DownloadFastasArgs {
@@ -14,7 +17,7 @@ pub struct DownloadFastasArgs {
     input: String,
 
     #[arg(short = 'o', long, default_value_t = "-".to_string())]
-    output_file: String,
+    output: String,
 
     #[arg(short = 'n', long, default_value_t = 0.30)]
     pub max_frac_ambig: f32,
@@ -26,35 +29,96 @@ pub struct DownloadFastasArgs {
     pub min_len: u64,
 }
 
-fn download_fasta_thread<W: std::io::Write + Send + 'static>(acc: String, tid: String, writer: Arc<Mutex<W>>) -> Result<(), Error> {
+fn download_fasta_thread(
+    acc: String,
+    tid: u32,
+    writer: Arc<Mutex<DatabaseWriter>>,
+    seen: Arc<Mutex<HashSet<String>>>,
+    min_len: u64,
+    max_len: u64,
+    max_frac_ambig: f32,
+) -> JoinHandle<()> {
+    let ret = std::thread::spawn(move || {
+        let fetch = Command::new("efetch")
+            .args(["-db", "nucleotide", "-id", &acc, "-format", "fasta"])
+            .output()
+            .unwrap();
 
-    std::thread::spawn(move || {
-        let fetch = Command::new("efetch").args(["-db", "nucleotide", "-id", &acc, "-format", "fasta"]).output().unwrap();
-        let mut lines = fetch.stdout.lines();
+        if !fetch.status.success() {
+            eprintln!(
+                "Downloading for acc {acc} failed: {}",
+                std::str::from_utf8(&fetch.stderr).unwrap()
+            );
+        }
 
-        // reheader
-        let header = lines.next().unwrap().unwrap();
-        assert!(header.starts_with(">"));
+        let lock = &mut writer.lock().unwrap();
+        let seen = &mut seen.lock().unwrap();
 
-        let (first, second) = header.trim().split_once(" ").unwrap_or((&header, ""));
-        let mut lock = writer.lock().unwrap();
+        process_metadata_fasta(
+            tid,
+            fetch.stdout.as_slice(),
+            lock,
+            seen,
+            min_len,
+            max_len,
+            max_frac_ambig,
+            false,
+            false,
+        )
+        .expect("processing fasta");
 
-        lock.write(first.as_bytes()).unwrap();
-        lock.write(b"|").unwrap();
-        lock.write(tid.as_bytes()).unwrap();
-        lock.write(b"|").unwrap();
-        lock.write(second.as_bytes()).unwrap();
-        lock.write(b"\n").unwrap();
+        // // reheader
+        // let header = lines.next().unwrap().unwrap();
+        // assert!(header.starts_with(">"));
+
+        // let (first, second) = header.trim().split_once(" ").unwrap_or((&header, ""));
+        // let mut lock = writer.lock().unwrap();
+
+        // lock.write(first.as_bytes()).unwrap();
+        // lock.write(b"|").unwrap();
+        // lock.write(tid.as_bytes()).unwrap();
+        // lock.write(b"|").unwrap();
+        // lock.write(second.as_bytes()).unwrap();
+        // lock.write(b"\n").unwrap();
     });
 
+    ret
+}
+
+pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
+    let input_lines = BufReader::new(std::fs::File::open(&args.input)?)
+        .lines()
+        .count();
+
+    let reader = BufReader::new(std::fs::File::open(&args.input)?);
+
+    let output = Arc::new(Mutex::new(DatabaseWriter::new(
+        args.output.clone(),
+        args.output.ends_with(".gz"),
+        None,
+    )?));
+
+    let mut tracker = NCBIRequestTracker::default();
+    let seen: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+
+    for (i, line) in reader.lines().enumerate() {
+        let l = line?;
+        let (taxid, acc) = l.split_once("\t").unwrap();
+
+        tracker.tick();
+
+        download_fasta_thread(
+            acc.to_string(),
+            taxid.parse::<u32>()?,
+            Arc::clone(&output),
+            Arc::clone(&seen),
+            args.min_len,
+            args.max_len,
+            args.max_frac_ambig,
+        );
+
+        eprintln!("Processed {} of {input_lines}", i + 1);
+    }
+
     Ok(())
 }
-
-fn download_fasta<W: std::io::Write + Send>(acc: &str, tid: &str, writer: Arc<Mutex<W>>) -> Result<(), Error> {
-    todo!();
-}
-
-pub fn cmd_download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
-    Ok(())
-}
-
