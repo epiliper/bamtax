@@ -207,13 +207,14 @@ fn download_fasta_thread(batch: Vec<(u32, String)>, api_key: String, sender: Sen
     while let Some(record) = reader.next() {
         let record = record.unwrap();
         let accession = record.id().unwrap();
-        let taxid = batch
+        if let Some(taxid) = batch
             .iter()
             .find_map(|(taxid, requested)| (requested == accession).then_some(*taxid))
-            .unwrap();
-        let mut fastabytes = Vec::new();
-        record.write(&mut fastabytes).unwrap();
-        sender.send(ThreadOutput { fastabytes, taxid }).unwrap();
+        {
+            let mut fastabytes = Vec::new();
+            record.write(&mut fastabytes).unwrap();
+            sender.send(ThreadOutput { fastabytes, taxid }).unwrap();
+        }
     }
 }
 
@@ -232,7 +233,7 @@ pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
     let (output, sender) = OutputThread::new(output, filtargs);
 
     let mut input = reader.lines().peekable();
-    let mut threadpool = ThreadPool::new(128);
+    let mut threadpool = ThreadPool::new(10);
 
     loop {
         if input.peek().is_none() {
