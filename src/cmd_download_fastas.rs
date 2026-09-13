@@ -1,9 +1,9 @@
 #![allow(clippy::unused_io_amount)]
 
 use crate::cmd_build_db::{DBFilterArgs, DatabaseWriter, process_metadata_fasta};
-use crate::cmd_download_accs::NCBIRequestTracker;
 use anyhow::Error;
 use clap::Parser;
+use seq_io::fasta::{Reader as FastaReader, Record};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::process::Command;
@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
+
+const BATCH_SIZE: usize = 200;
 
 pub struct ThreadOutput {
     fastabytes: Vec<u8>,
@@ -95,12 +98,12 @@ impl Worker {
         true
     }
 
-    fn run(&mut self, acc: String, tid: u32, api_key: String, sender: Sender<ThreadOutput>) {
+    fn run(&mut self, batch: Vec<(u32, String)>, api_key: String, sender: Sender<ThreadOutput>) {
         assert!(self.handle.is_none());
         let notify = Arc::clone(&self.notify);
         self.handle = Some(std::thread::spawn(move || {
             notify.mark_running();
-            download_fasta_thread(acc, tid, api_key, sender);
+            download_fasta_thread(batch, api_key, sender);
             notify.mark_done();
             notify.jobs_done.fetch_add(1, Ordering::Relaxed);
         }));
@@ -181,34 +184,43 @@ pub struct DownloadFastasArgs {
     pub api_key: String,
 }
 
-fn download_fasta_thread(acc: String, tid: u32, api_key: String, sender: Sender<ThreadOutput>) {
+fn download_fasta_thread(batch: Vec<(u32, String)>, api_key: String, sender: Sender<ThreadOutput>) {
+    let accessions = batch
+        .iter()
+        .map(|(_, accession)| accession.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
     let fetch = Command::new("efetch")
-        .args(["-db", "nucleotide", "-id", &acc, "-format", "fasta"])
+        .args(["-db", "nucleotide", "-id", &accessions, "-format", "fasta"])
         .env("NCBI_API_KEY", api_key)
         .output()
         .unwrap();
 
-    if !fetch.status.success() {
+    if !fetch.status.success() | fetch.stdout.is_empty() {
         eprintln!(
-            "Downloading for acc {acc} failed: {}",
+            "Downloading batch failed: {}",
             std::str::from_utf8(&fetch.stderr).unwrap()
         );
     }
 
-    sender
-        .send(ThreadOutput {
-            fastabytes: fetch.stdout,
-            taxid: tid,
-        })
-        .unwrap()
+    let mut reader = FastaReader::new(fetch.stdout.as_slice());
+    while let Some(record) = reader.next() {
+        let record = record.unwrap();
+        let accession = record.id().unwrap();
+        let taxid = batch
+            .iter()
+            .find_map(|(taxid, requested)| (requested == accession).then_some(*taxid))
+            .unwrap();
+        let mut fastabytes = Vec::new();
+        record.write(&mut fastabytes).unwrap();
+        sender.send(ThreadOutput { fastabytes, taxid }).unwrap();
+    }
 }
 
 pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
     let reader = BufReader::new(std::fs::File::open(&args.input)?);
 
     let output = DatabaseWriter::new(args.output_prefix.clone(), args.gzip_output, None)?;
-
-    let mut tracker = NCBIRequestTracker::default();
 
     let filtargs = DBFilterArgs {
         min_len: args.min_len,
@@ -228,17 +240,18 @@ pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
         }
 
         if let Some(worker) = threadpool.get_available() {
-            let line = input.next().unwrap()?;
+            let mut batch = Vec::with_capacity(BATCH_SIZE);
+            while batch.len() < BATCH_SIZE {
+                let Some(line) = input.next() else {
+                    break;
+                };
+                let line = line?;
+                let (taxid, acc) = line.split_once("\t").unwrap();
+                batch.push((taxid.parse::<u32>().unwrap(), acc.to_string()));
+            }
 
-            let (taxid, acc) = line.split_once("\t").unwrap();
-            tracker.tick();
-
-            worker.run(
-                acc.to_string(),
-                taxid.parse::<u32>().unwrap(),
-                args.api_key.to_string(),
-                sender.clone(),
-            );
+            std::thread::sleep(Duration::from_millis(110));
+            worker.run(batch, args.api_key.to_string(), sender.clone());
         }
     }
 
