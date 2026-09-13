@@ -185,7 +185,7 @@ impl DatabaseWriter {
         Ok(())
     }
 
-    fn flush(&mut self) -> Result<(), Error> {
+    pub fn flush(&mut self) -> Result<(), Error> {
         self.header_writer.flush()?;
         self.fasta_writer.flush()?;
         Ok(())

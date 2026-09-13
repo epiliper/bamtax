@@ -50,6 +50,8 @@ impl OutputThread {
                 )
                 .unwrap();
             }
+
+            output_writer.flush().unwrap();
         });
 
         (Self { handle: j }, s)
@@ -143,6 +145,15 @@ impl ThreadPool {
             .iter_mut()
             .find_map(|w| w.is_finished().then_some(w))
     }
+
+    // join all threads
+    pub fn conclude(&mut self) {
+        loop {
+            if self.workers.iter_mut().all(|f| f.is_finished()) {
+                break;
+            }
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -211,7 +222,11 @@ pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
     let mut input = reader.lines().peekable();
     let mut threadpool = ThreadPool::new(128);
 
-    while input.peek().is_some() {
+    loop {
+        if input.peek().is_none() {
+            break;
+        }
+
         if let Some(worker) = threadpool.get_available() {
             let line = input.next().unwrap()?;
 
@@ -227,7 +242,7 @@ pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
         }
     }
 
-    threadpool.get_available();
+    threadpool.conclude();
     std::mem::drop(sender);
     output.handle.join().unwrap();
 
