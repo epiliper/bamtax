@@ -27,7 +27,7 @@ pub struct CheckTaxonomyArgs {
     #[arg(short = 'o')]
     pub output: Option<String>,
 
-    #[arg(short = 't')]
+    #[arg(short = 't', long)]
     pub taxonomy_dir: String,
 }
 

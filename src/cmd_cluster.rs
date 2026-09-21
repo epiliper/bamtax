@@ -2,9 +2,7 @@
 use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Error};
 use clap::Parser;
-use rust_htslib::bam::{
-    HeaderView, IndexedReader, Read, Reader, Record, ext::BamRecordExtensions,
-};
+use rust_htslib::bam::{HeaderView, IndexedReader, Read, Reader, Record, ext::BamRecordExtensions};
 use std::fs::File;
 use std::io::{self, Write};
 
@@ -40,7 +38,7 @@ pub struct ClusterArgs {
     #[arg(short = 'a', default_value_t = 0.4)]
     pub min_frac_read_matched: f32,
 
-    #[arg(short = 't')]
+    #[arg(short = 't', long)]
     pub taxonomy_dir: String,
 
     #[arg(required = true, num_args = 1..)]

@@ -1,3 +1,4 @@
+use clap::ValueEnum;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -28,10 +29,17 @@ impl std::hash::Hash for Taxon {
     }
 }
 
+#[derive(Debug, Copy, Clone, ValueEnum)]
+pub enum Rank {
+    Species,
+    Genus,
+}
+
 #[derive(Debug)]
 pub struct Taxonomy {
     nodes: HashMap<u32, Taxon>,
-    memo: HashMap<u32, Option<u32>>,
+    species_memo: HashMap<u32, Option<u32>>,
+    genus_memo: HashMap<u32, Option<u32>>,
     children: HashMap<u32, Vec<u32>>,
 }
 
@@ -75,34 +83,43 @@ impl<'a> Taxonomy {
         Some(lineage)
     }
 
-    /// Finds the requested taxon's closest ancestor with rank `species`.
     pub fn species(&mut self, tax_id: u32) -> Option<&Taxon> {
-        if let Some(memo) = self.memo.get(&tax_id) {
-            return memo.and_then(|t| self.get(t));
-        }
+        self.lookup(tax_id, Rank::Species)
+    }
+
+    pub fn genus(&mut self, tax_id: u32) -> Option<&Taxon> {
+        self.lookup(tax_id, Rank::Genus)
+    }
+
+    pub fn lookup(&mut self, tax_id: u32, rank: Rank) -> Option<&Taxon> {
+        let (memo, name) = match rank {
+            Rank::Species => (&mut self.species_memo, "species"),
+            Rank::Genus => (&mut self.genus_memo, "genus"),
+        };
 
         let mut seen = HashSet::new();
         let mut current = tax_id;
 
         loop {
             if !seen.insert(current) {
-                self.memo.insert(tax_id, None);
+                memo.insert(tax_id, None);
                 return None;
             }
 
             let taxon = self.nodes.get(&current)?;
 
-            if taxon.rank == "species" {
-                self.memo.insert(tax_id, Some(taxon.tax_id));
+            if taxon.rank == name {
+                memo.insert(tax_id, Some(taxon.tax_id));
                 return Some(taxon);
             }
             if taxon.parent_tax_id == current {
-                self.memo.insert(tax_id, None);
+                memo.insert(tax_id, None);
                 return None;
             }
             current = taxon.parent_tax_id;
         }
     }
+
     pub fn descendants(&self, taxid: u32) -> impl Iterator<Item = &[u32]> {
         let mut deque: VecDeque<u32> = VecDeque::from([taxid]);
         let mut seen: HashSet<u32> = HashSet::new();
@@ -122,7 +139,8 @@ impl<'a> Taxonomy {
     fn from_readers(nodes: impl BufRead, names: impl BufRead) -> Result<Self> {
         let mut taxonomy = Self {
             nodes: HashMap::new(),
-            memo: HashMap::new(),
+            species_memo: HashMap::new(),
+            genus_memo: HashMap::new(),
             children: HashMap::new(),
         };
 

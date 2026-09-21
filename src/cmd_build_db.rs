@@ -198,7 +198,7 @@ pub fn base_is_nonambig(base: u8) -> bool {
     b == b'A' || b == b'C' || b == b'G' || b == b'T'
 }
 
-fn seq_n_bases_ambig_and_total(seq: &[u8]) -> (u32, u32) {
+pub fn seq_n_bases_ambig_and_total(seq: &[u8]) -> (u32, u32) {
     let mut ambig = 0;
     let mut total = 0;
 
@@ -212,7 +212,7 @@ fn seq_n_bases_ambig_and_total(seq: &[u8]) -> (u32, u32) {
     (ambig, total)
 }
 
-fn construct_assembly_to_tid_db<P: AsRef<Path>>(
+pub fn construct_assembly_to_tid_db<P: AsRef<Path>>(
     paths: &[P],
 ) -> Result<HashMap<String, u32>, Error> {
     let mut line = String::new();

@@ -6,6 +6,7 @@ pub mod cmd_download_accs;
 pub mod cmd_download_fastas;
 pub mod cmd_emit_read_names;
 pub mod cmd_report_species;
+pub mod cmd_taxosplit;
 mod filter_read;
 mod locus_tracker;
 pub mod taxonomy;
@@ -18,6 +19,7 @@ use cmd_download_accs::{DownloadAccessionsArgs, download_accs_main};
 use cmd_download_fastas::{DownloadFastasArgs, download_fastas_main};
 use cmd_emit_read_names::{EmitNamesArgs, emit_names_main};
 use cmd_report_species::{ReportSpeciesArgs, report_species_main};
+use cmd_taxosplit::{TaxoSplitArgs, taxosplit_main};
 
 #[derive(Subcommand)]
 enum Commands {
@@ -28,6 +30,7 @@ enum Commands {
     ReportSpecies(ReportSpeciesArgs),
     DownloadAccs(DownloadAccessionsArgs),
     DownloadFastas(DownloadFastasArgs),
+    TaxoSplit(TaxoSplitArgs),
 }
 
 #[derive(Parser)]
@@ -47,6 +50,7 @@ pub fn main() {
         Commands::ReportSpecies(args) => report_species_main(args),
         Commands::DownloadAccs(args) => download_accs_main(args),
         Commands::DownloadFastas(args) => download_fastas_main(args),
+        Commands::TaxoSplit(args) => taxosplit_main(args),
     };
 
     if let Err(e) = result {
