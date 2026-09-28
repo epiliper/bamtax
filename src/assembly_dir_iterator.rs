@@ -20,8 +20,7 @@ impl AssemblyDirIterator {
         };
         let mut q = VecDeque::new();
         q.push_back((
-            std::fs::read_dir(input)
-                .with_context(|| format!("couldn't read input directory {:?}", input))?,
+            std::fs::read_dir(input).with_context(|| format!("couldn't read input directory {:?}", input))?,
             assembly_name,
         ));
         Ok(Self { q })
@@ -47,8 +46,7 @@ impl AssemblyDirIterator {
                 } else {
                     assembly_name
                 };
-                self.q
-                    .push_front((std::fs::read_dir(&path)?, child_assembly_name));
+                self.q.push_front((std::fs::read_dir(&path)?, child_assembly_name));
                 continue;
             }
             if file_type.is_file()
@@ -97,10 +95,7 @@ mod tests {
 
     #[test]
     fn finds_all_fna_files_below_nested_assembly_directories() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let root = std::env::temp_dir().join(format!("bamtax-assembly-iterator-{unique}"));
         let assembly = root.join("download").join("GCF_000001.1_example");
         let nested = assembly.join("nested");

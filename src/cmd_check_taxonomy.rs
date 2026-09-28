@@ -61,12 +61,11 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
         .delimiter(args.delimiter)
         .from_writer(outwriter);
 
-    let mut query_reader: BufReader<Box<dyn Read>> =
-        if let Some(input) = args.query_headers.as_ref() {
-            BufReader::new(Box::new(std::fs::File::open(input)?))
-        } else {
-            BufReader::new(Box::new(std::io::stdin()))
-        };
+    let mut query_reader: BufReader<Box<dyn Read>> = if let Some(input) = args.query_headers.as_ref() {
+        BufReader::new(Box::new(std::fs::File::open(input)?))
+    } else {
+        BufReader::new(Box::new(std::io::stdin()))
+    };
 
     let mut ref_reader = BufReader::new(std::fs::File::open(&args.database_headers)?);
 
@@ -102,15 +101,11 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
             .with_context(|| format!("invalid taxon id in query: {}", line))?;
         line.clear();
 
-        let query_name = taxonomy
-            .get(tid)
-            .map(|d| d.name.as_str())
-            .unwrap_or("not in taxonomy");
+        let query_name = taxonomy.get(tid).map(|d| d.name.as_str()).unwrap_or("not in taxonomy");
 
-        let descendants =
-            std::iter::chain(taxonomy.descendants(tid).flatten(), std::iter::once(&tid))
-                .filter(|d| db_contains.contains(d))
-                .copied();
+        let descendants = std::iter::chain(taxonomy.descendants(tid).flatten(), std::iter::once(&tid))
+            .filter(|d| db_contains.contains(d))
+            .copied();
 
         let mut count = 0;
 

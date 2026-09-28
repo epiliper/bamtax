@@ -1,7 +1,5 @@
 use crate::assembly_dir_iterator::{AssemblyDirIterator, file_name};
-use crate::cmd_build_db::{
-    DBFilterArgs, DatabaseWriter, construct_assembly_to_tid_db, seq_n_bases_ambig_and_total,
-};
+use crate::cmd_build_db::{DBFilterArgs, DatabaseWriter, construct_assembly_to_tid_db, seq_n_bases_ambig_and_total};
 use crate::cmd_cluster::taxid_from_id_str;
 use crate::taxonomy::{Rank, Taxonomy};
 use anyhow::{Context, Error};
@@ -87,16 +85,12 @@ fn taxosplit_fasta(
 
         // don't add anything too big.
         if total > filtargs.max_len {
-            eprintln!(
-                "skipping seuqence {id}: too long! {total} > {}",
-                filtargs.max_len
-            );
+            eprintln!("skipping seuqence {id}: too long! {total} > {}", filtargs.max_len);
             continue;
         }
 
         let (tid, id) = if headers_already_changed {
-            let tid = taxid_from_id_str(id)
-                .with_context(|| format!("Record in file has invalid header: {id}"))?;
+            let tid = taxid_from_id_str(id).with_context(|| format!("Record in file has invalid header: {id}"))?;
             let id = id.to_string();
             (tid, id)
         } else {
@@ -155,10 +149,7 @@ pub fn taxosplit_main(args: TaxoSplitArgs) -> Result<(), Error> {
             for f in entries {
                 let f = f?;
                 if let Some(fname) = file_name(&f.path())? {
-                    if !fname.contains(".fna")
-                        && !fname.contains(".fa")
-                        && !fname.contains(".fasta")
-                    {
+                    if !fname.contains(".fna") && !fname.contains(".fa") && !fname.contains(".fasta") {
                         continue;
                     }
 
@@ -181,9 +172,9 @@ pub fn taxosplit_main(args: TaxoSplitArgs) -> Result<(), Error> {
         let mut iterator = AssemblyDirIterator::new(input)?;
 
         while let Some((assembly, fasta)) = iterator.next_item()? {
-            let taxid = assembly_tid_map.get(&assembly).with_context(|| {
-                format!("Assembly {assembly} not found in assembly to taxon id map!")
-            })?;
+            let taxid = assembly_tid_map
+                .get(&assembly)
+                .with_context(|| format!("Assembly {assembly} not found in assembly to taxon id map!"))?;
 
             taxosplit_fasta(
                 *taxid,

@@ -48,10 +48,8 @@ impl<'a> Taxonomy {
         let path = path.as_ref();
         let nodes_path = path.join("nodes.dmp");
         let names_path = path.join("names.dmp");
-        let nodes =
-            File::open(&nodes_path).with_context(|| format!("open {}", nodes_path.display()))?;
-        let names =
-            File::open(&names_path).with_context(|| format!("open {}", names_path.display()))?;
+        let nodes = File::open(&nodes_path).with_context(|| format!("open {}", nodes_path.display()))?;
+        let names = File::open(&names_path).with_context(|| format!("open {}", names_path.display()))?;
 
         Self::from_readers(BufReader::new(nodes), BufReader::new(names))
     }
@@ -148,8 +146,7 @@ impl<'a> Taxonomy {
             let line = line.with_context(|| format!("read nodes.dmp line {}", line_number + 1))?;
             let mut fields = line.split("\t|\t");
             let tax_id = parse_tax_id(fields.next(), "tax_id", "nodes.dmp", line_number)?;
-            let parent_tax_id =
-                parse_tax_id(fields.next(), "parent tax_id", "nodes.dmp", line_number)?;
+            let parent_tax_id = parse_tax_id(fields.next(), "parent tax_id", "nodes.dmp", line_number)?;
             let rank = fields
                 .next()
                 .with_context(|| format!("nodes.dmp line {} has no rank", line_number + 1))?;
@@ -191,23 +188,14 @@ impl<'a> Taxonomy {
                 continue;
             }
 
-            taxonomy
-                .children
-                .entry(v.parent_tax_id)
-                .or_default()
-                .push(*k);
+            taxonomy.children.entry(v.parent_tax_id).or_default().push(*k);
         }
 
         Ok(taxonomy)
     }
 }
 
-fn parse_tax_id(
-    field: Option<&str>,
-    field_name: &str,
-    file_name: &str,
-    zero_based_line_number: usize,
-) -> Result<u32> {
+fn parse_tax_id(field: Option<&str>, field_name: &str, file_name: &str, zero_based_line_number: usize) -> Result<u32> {
     let line_number = zero_based_line_number + 1;
     field
         .with_context(|| format!("{file_name} line {line_number} has no {field_name}"))?

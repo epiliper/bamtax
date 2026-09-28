@@ -3,11 +3,7 @@ use anyhow::Error;
 use rust_htslib::bam::record::{Cigar, Record};
 
 #[inline(always)]
-pub fn filter_read(
-    rec: &Record,
-    min_frac_bases_aligned: f32,
-    min_frac_bases_matched: f32,
-) -> Result<bool, Error> {
+pub fn filter_read(rec: &Record, min_frac_bases_aligned: f32, min_frac_bases_matched: f32) -> Result<bool, Error> {
     let mut bases_aligned: usize = 0;
     let mut bases_matched: usize = 0;
 
@@ -63,7 +59,8 @@ mod test {
     #[test]
     fn test_filter_read1() {
         let mut rec = Record::new();
-        let seq = "GGTCACTGTCNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNGACGGAGTCTCACTCTGTCGCCCAGGCTGGAGTGCA";
+        let seq =
+            "GGTCACTGTCNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNGACGGAGTCTCACTCTGTCGCCCAGGCTGGAGTGCA";
         let cigar = "1X3=1I5=52X2I2=1X33=";
         let qual = vec![40; seq.len()];
         rec.set(

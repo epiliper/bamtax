@@ -64,10 +64,7 @@ pub fn parse_delimiter(value: &str) -> Result<u8, String> {
 #[inline(always)]
 pub fn taxid_from_id_str(id: &str) -> Result<u32, Error> {
     if let Some((_header, meta)) = id.split_once("|taxid:") {
-        let digits = meta
-            .bytes()
-            .take_while(|b| b.is_ascii_digit())
-            .collect::<Vec<u8>>();
+        let digits = meta.bytes().take_while(|b| b.is_ascii_digit()).collect::<Vec<u8>>();
 
         std::str::from_utf8(&digits)
             .expect("invalid taxid string")
@@ -122,9 +119,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         Box::new(File::create(&args.output).context("create output")?)
     };
 
-    let mut writer = csv::WriterBuilder::new()
-        .delimiter(args.delimiter)
-        .from_writer(output);
+    let mut writer = csv::WriterBuilder::new().delimiter(args.delimiter).from_writer(output);
 
     // we expect headers across all input files to match. We just grab the first one.
     let header = Reader::from_path(&args.inputs[0])
@@ -144,8 +139,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         reader.set_threads(4).context("set reader threads")?;
         reader.fetch(".").context("fetch everything")?;
 
-        if !cursory_header_equivalence_check(reader.header(), headerfirst, headerlast, headercount)?
-        {
+        if !cursory_header_equivalence_check(reader.header(), headerfirst, headerlast, headercount)? {
             anyhow::bail!(
                 "File {} has a different header from the first input file {}! All BAM headers should be the same.",
                 input,
@@ -156,8 +150,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         let basename = input.rsplit_once(".").unwrap_or((input, "")).0;
 
         let mut failed_read_writer = std::io::BufWriter::new(
-            std::fs::File::create(format!("{basename}_failed_reads.txt"))
-                .context("create failed reads file")?,
+            std::fs::File::create(format!("{basename}_failed_reads.txt")).context("create failed reads file")?,
         );
 
         let mut rec = Record::new();
@@ -176,9 +169,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
                 continue;
             }
 
-            if filter_read(&rec, args.min_frac_read_aligned, args.min_frac_read_matched)
-                .context("filter record")?
-            {
+            if filter_read(&rec, args.min_frac_read_aligned, args.min_frac_read_matched).context("filter record")? {
                 let taxid = record_get_taxid(&header, &rec).expect("get read taxid");
                 if let Some(species) = taxonomy.species(taxid) {
                     seq_len += rec.seq_len();
@@ -193,10 +184,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
                         },
                     )
                 } else {
-                    eprintln!(
-                        "Warning: failed to find species for taxon id {}. Skipping...",
-                        taxid
-                    );
+                    eprintln!("Warning: failed to find species for taxon id {}. Skipping...", taxid);
 
                     failed_read_writer.write(rec.qname())?;
                     failed_read_writer.write(b"\t")?;

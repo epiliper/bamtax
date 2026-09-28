@@ -63,20 +63,15 @@ impl AlignmentReport {
 
 impl LocusTracker {
     pub fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-        }
+        Self { map: HashMap::new() }
     }
 
     pub fn add(&mut self, target: impl ToString, tid: i32, range: Range) {
-        self.map
-            .entry(target.to_string())
-            .or_default()
-            .push(Alignment {
-                tid,
-                span: range,
-                depth: 1,
-            });
+        self.map.entry(target.to_string()).or_default().push(Alignment {
+            tid,
+            span: range,
+            depth: 1,
+        });
     }
 
     pub fn resolve(&mut self, min_calls_per_loci: usize, read_len: usize) -> AlignmentReport {
@@ -87,12 +82,7 @@ impl LocusTracker {
         };
 
         for (k, v) in self.map.iter_mut() {
-            v.sort_by(|a, b| {
-                a.span
-                    .start
-                    .cmp(&b.span.start)
-                    .then(a.span.end.cmp(&b.span.end))
-            });
+            v.sort_by(|a, b| a.span.start.cmp(&b.span.start).then(a.span.end.cmp(&b.span.end)));
 
             let mut dest: Vec<Alignment> = Vec::with_capacity(v.len());
             let mut prev = v[0].clone();
@@ -112,10 +102,7 @@ impl LocusTracker {
 
             dest.push(prev);
 
-            let total: usize = dest
-                .iter()
-                .map(|d| std::cmp::max(1, d.span.len() / read_len))
-                .sum();
+            let total: usize = dest.iter().map(|d| std::cmp::max(1, d.span.len() / read_len)).sum();
 
             if total >= min_calls_per_loci {
                 report.alns.insert(k.clone(), (dest, set));
@@ -134,11 +121,7 @@ mod test {
     use rust_htslib::bam::{Header, header::HeaderRecord};
 
     fn assert_spans(report: &AlignmentReport, target: &str, expected: &[Range]) {
-        let actual: Vec<_> = report.alns[target]
-            .0
-            .iter()
-            .map(|alignment| alignment.span)
-            .collect();
+        let actual: Vec<_> = report.alns[target].0.iter().map(|alignment| alignment.span).collect();
 
         assert_eq!(actual, expected);
     }
@@ -149,10 +132,7 @@ mod test {
 
         let r1 = Range { start: 0, end: 350 };
         let r2 = Range { start: 5, end: 120 };
-        let r3 = Range {
-            start: 470,
-            end: 530,
-        };
+        let r3 = Range { start: 470, end: 530 };
         let r4 = Range { start: 0, end: 1 };
 
         lt.add(1, 0, r3);
@@ -224,35 +204,14 @@ mod test {
     fn test_resolve_handles_targets_independently() {
         let mut lt = LocusTracker::new();
         lt.add(1, 0, Range { start: 0, end: 10 });
-        lt.add(
-            2,
-            1,
-            Range {
-                start: 100,
-                end: 120,
-            },
-        );
+        lt.add(2, 1, Range { start: 100, end: 120 });
         lt.add(1, 0, Range { start: 5, end: 15 });
-        lt.add(
-            2,
-            1,
-            Range {
-                start: 110,
-                end: 130,
-            },
-        );
+        lt.add(2, 1, Range { start: 110, end: 130 });
 
         let report = lt.resolve(0, 1);
 
         assert_spans(&report, "1", &[Range { start: 0, end: 15 }]);
-        assert_spans(
-            &report,
-            "2",
-            &[Range {
-                start: 100,
-                end: 130,
-            }],
-        );
+        assert_spans(&report, "2", &[Range { start: 100, end: 130 }]);
     }
 
     #[test]
@@ -264,12 +223,8 @@ mod test {
         let header = test_header();
         let mut writer = csv::Writer::from_writer(Vec::new());
 
-        report
-            .serialize(&mut writer, &header, "sample.bam")
-            .unwrap();
-        report
-            .serialize(&mut writer, &header, "sample-2.bam")
-            .unwrap();
+        report.serialize(&mut writer, &header, "sample.bam").unwrap();
+        report.serialize(&mut writer, &header, "sample-2.bam").unwrap();
 
         let output = String::from_utf8(writer.into_inner().unwrap()).unwrap();
         assert_eq!(
@@ -284,13 +239,9 @@ mod test {
         lt.add("species", 0, Range { start: 0, end: 10 });
         let report = lt.resolve(0, 1);
         let header = test_header();
-        let mut writer = csv::WriterBuilder::new()
-            .delimiter(b'\t')
-            .from_writer(Vec::new());
+        let mut writer = csv::WriterBuilder::new().delimiter(b'\t').from_writer(Vec::new());
 
-        report
-            .serialize(&mut writer, &header, "sample.bam")
-            .unwrap();
+        report.serialize(&mut writer, &header, "sample.bam").unwrap();
 
         let output = String::from_utf8(writer.into_inner().unwrap()).unwrap();
         assert_eq!(
@@ -301,16 +252,8 @@ mod test {
 
     fn test_header() -> HeaderView {
         let mut header = Header::new();
-        header.push_record(
-            HeaderRecord::new(b"SQ")
-                .push_tag(b"SN", "ref-a")
-                .push_tag(b"LN", 100),
-        );
-        header.push_record(
-            HeaderRecord::new(b"SQ")
-                .push_tag(b"SN", "ref-b")
-                .push_tag(b"LN", 100),
-        );
+        header.push_record(HeaderRecord::new(b"SQ").push_tag(b"SN", "ref-a").push_tag(b"LN", 100));
+        header.push_record(HeaderRecord::new(b"SQ").push_tag(b"SN", "ref-b").push_tag(b"LN", 100));
         HeaderView::from_header(&header)
     }
 }

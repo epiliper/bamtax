@@ -98,20 +98,12 @@ pub struct DatabaseWriter {
 unsafe impl Send for DatabaseWriter {}
 
 impl DatabaseWriter {
-    pub fn new(
-        output_prefix: String,
-        gzip_fasta: bool,
-        chunksize: Option<u64>,
-    ) -> Result<Self, Error> {
+    pub fn new(output_prefix: String, gzip_fasta: bool, chunksize: Option<u64>) -> Result<Self, Error> {
         let chunk_number = u64::from(chunksize.is_some());
-        let fasta_writer =
-            Self::create_fasta_writer(&output_prefix, gzip_fasta, chunksize.map(|_| chunk_number))?;
+        let fasta_writer = Self::create_fasta_writer(&output_prefix, gzip_fasta, chunksize.map(|_| chunk_number))?;
         let header_file = std::fs::File::create(format!("{output_prefix}_headers.txt"))?;
         header_file.try_lock()?;
-        let header_writer = Box::new(std::io::BufWriter::with_capacity(
-            BUFWRITER_CAP,
-            header_file,
-        ));
+        let header_writer = Box::new(std::io::BufWriter::with_capacity(BUFWRITER_CAP, header_file));
         Ok(Self {
             output_prefix,
             gzip_fasta,
@@ -138,18 +130,12 @@ impl DatabaseWriter {
             let writer: ParCompress<Mgzip, _> = ParCompressBuilder::new()
                 .compression_level(Compression::new(4))
                 .num_threads(num_cpus::get())?
-                .from_writer(std::io::BufWriter::with_capacity(
-                    BUFWRITER_CAP,
-                    output_file,
-                ));
+                .from_writer(std::io::BufWriter::with_capacity(BUFWRITER_CAP, output_file));
             Ok(Box::new(writer))
         } else {
             let output_file = std::fs::File::create(format!("{output_prefix}.fasta"))?;
             output_file.try_lock()?;
-            Ok(Box::new(std::io::BufWriter::with_capacity(
-                BUFWRITER_CAP,
-                output_file,
-            )))
+            Ok(Box::new(std::io::BufWriter::with_capacity(BUFWRITER_CAP, output_file)))
         }
     }
 
@@ -161,16 +147,14 @@ impl DatabaseWriter {
             .and_then(|size| size.checked_add(1))
             .context("FASTA record is too large")?;
 
-        if self.chunksize.is_some_and(|limit| {
-            self.chunk_bytes > 0 && self.chunk_bytes.saturating_add(record_bytes) > limit
-        }) {
+        if self
+            .chunksize
+            .is_some_and(|limit| self.chunk_bytes > 0 && self.chunk_bytes.saturating_add(record_bytes) > limit)
+        {
             self.fasta_writer.flush()?;
             self.chunk_number += 1;
-            self.fasta_writer = Self::create_fasta_writer(
-                &self.output_prefix,
-                self.gzip_fasta,
-                Some(self.chunk_number),
-            )?;
+            self.fasta_writer =
+                Self::create_fasta_writer(&self.output_prefix, self.gzip_fasta, Some(self.chunk_number))?;
             self.chunk_bytes = 0;
         }
 
@@ -212,9 +196,7 @@ pub fn seq_n_bases_ambig_and_total(seq: &[u8]) -> (u32, u32) {
     (ambig, total)
 }
 
-pub fn construct_assembly_to_tid_db<P: AsRef<Path>>(
-    paths: &[P],
-) -> Result<HashMap<String, u32>, Error> {
+pub fn construct_assembly_to_tid_db<P: AsRef<Path>>(paths: &[P]) -> Result<HashMap<String, u32>, Error> {
     let mut line = String::new();
     let mut ret = HashMap::new();
 
@@ -283,10 +265,7 @@ pub fn process_metadata_fasta<R: std::io::Read>(
         }
 
         if total > filtargs.max_len {
-            eprintln!(
-                "skipping seuqence {id}: too long! {total} > {}",
-                filtargs.max_len
-            );
+            eprintln!("skipping seuqence {id}: too long! {total} > {}", filtargs.max_len);
             continue;
         }
 
@@ -303,9 +282,8 @@ pub fn process_metadata_fasta<R: std::io::Read>(
             };
             format!("{}|taxid:{}|{}", acc, taxid, desc)
         } else {
-            let _ = taxid_from_id_str(id).with_context(|| {
-                format!("record in pre-reheadered fasta has invalid header: {id}")
-            })?;
+            let _ = taxid_from_id_str(id)
+                .with_context(|| format!("record in pre-reheadered fasta has invalid header: {id}"))?;
             id.to_string()
         };
 
@@ -348,10 +326,7 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
             for f in entries {
                 let f = f?;
                 if let Some(fname) = file_name(&f.path())? {
-                    if !fname.contains(".fna")
-                        && !fname.contains(".fa")
-                        && !fname.contains(".fasta")
-                    {
+                    if !fname.contains(".fna") && !fname.contains(".fa") && !fname.contains(".fasta") {
                         continue;
                     }
 
@@ -373,9 +348,9 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
         let mut iterator = AssemblyDirIterator::new(input)?;
 
         while let Some((assembly, fasta)) = iterator.next_item()? {
-            let taxid = assembly_tid_map.get(&assembly).with_context(|| {
-                format!("Assembly {assembly} not found in assembly to taxon id map!")
-            })?;
+            let taxid = assembly_tid_map
+                .get(&assembly)
+                .with_context(|| format!("Assembly {assembly} not found in assembly to taxon id map!"))?;
 
             process_metadata_fasta(
                 *taxid,
@@ -414,17 +389,12 @@ mod tests {
 
     #[test]
     fn clap_rejects_an_invalid_chunksize() {
-        assert!(
-            BuildDbArgs::try_parse_from(["build-db", "-o", "db", "--chunksize", "10MB"]).is_err()
-        );
+        assert!(BuildDbArgs::try_parse_from(["build-db", "-o", "db", "--chunksize", "10MB"]).is_err());
     }
 
     #[test]
     fn chunks_without_splitting_fasta_records() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let root = std::env::temp_dir().join(format!("bamtax-build-db-{unique}"));
         fs::create_dir(&root).unwrap();
         let prefix = root.join("db").to_string_lossy().into_owned();
@@ -436,14 +406,8 @@ mod tests {
         writer.flush().unwrap();
         drop(writer);
 
-        assert_eq!(
-            fs::read_to_string(root.join("db.1.fasta")).unwrap(),
-            ">one\nAAAA\n"
-        );
-        assert_eq!(
-            fs::read_to_string(root.join("db.2.fasta")).unwrap(),
-            ">two\nCCCC\n"
-        );
+        assert_eq!(fs::read_to_string(root.join("db.1.fasta")).unwrap(), ">one\nAAAA\n");
+        assert_eq!(fs::read_to_string(root.join("db.2.fasta")).unwrap(), ">two\nCCCC\n");
         assert_eq!(
             fs::read_to_string(root.join("db.3.fasta")).unwrap(),
             ">oversized\nGGGGGGGGGG\n"

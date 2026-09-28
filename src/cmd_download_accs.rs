@@ -71,11 +71,7 @@ impl std::default::Default for NCBIRequestTracker {
     }
 }
 
-pub fn download_accs_for_taxid(
-    taxid: u32,
-    tracker: &mut NCBIRequestTracker,
-    api_key: &str,
-) -> Result<Vec<u8>, Error> {
+pub fn download_accs_for_taxid(taxid: u32, tracker: &mut NCBIRequestTracker, api_key: &str) -> Result<Vec<u8>, Error> {
     tracker.tick();
     let search = Command::new("esearch")
         .stdout(Stdio::piped())
@@ -90,10 +86,7 @@ pub fn download_accs_for_taxid(
         .env("NCBI_API_KEY", api_key)
         .output()?;
     if !fetch.status.success() {
-        eprintln!(
-            "error fetching for {taxid}: {}",
-            std::str::from_utf8(&fetch.stderr)?
-        );
+        eprintln!("error fetching for {taxid}: {}", std::str::from_utf8(&fetch.stderr)?);
     }
 
     Ok(fetch.stdout)
@@ -101,9 +94,7 @@ pub fn download_accs_for_taxid(
 
 pub fn download_accs_main(args: DownloadAccessionsArgs) -> Result<(), Error> {
     let (totallines, input): (usize, Box<dyn Read>) = (
-        BufReader::new(open_file_reader(&args.input)?)
-            .lines()
-            .count(),
+        BufReader::new(open_file_reader(&args.input)?).lines().count(),
         open_file_reader(&args.input)?,
     );
 

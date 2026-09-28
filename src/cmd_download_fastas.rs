@@ -32,10 +32,7 @@ struct OutputThread {
 }
 
 impl OutputThread {
-    pub fn new(
-        mut output_writer: DatabaseWriter,
-        filtargs: DBFilterArgs,
-    ) -> (Self, Sender<ThreadOutput>) {
+    pub fn new(mut output_writer: DatabaseWriter, filtargs: DBFilterArgs) -> (Self, Sender<ThreadOutput>) {
         let (s, r): (Sender<ThreadOutput>, Receiver<ThreadOutput>) = channel();
 
         let j = std::thread::spawn(move || {
@@ -63,10 +60,7 @@ impl OutputThread {
 
 impl ThreadSignal {
     pub fn wait_while(&self) {
-        let _l = self
-            .c
-            .wait_while(self.n.lock().unwrap(), |free| *free == 0)
-            .unwrap();
+        let _l = self.c.wait_while(self.n.lock().unwrap(), |free| *free == 0).unwrap();
     }
 
     pub fn mark_running(&self) {
@@ -144,9 +138,7 @@ impl ThreadPool {
             "Finished {} jobs so far...\r",
             self.notify.jobs_done.load(Ordering::Relaxed)
         );
-        self.workers
-            .iter_mut()
-            .find_map(|w| w.is_finished().then_some(w))
+        self.workers.iter_mut().find_map(|w| w.is_finished().then_some(w))
     }
 
     // join all threads

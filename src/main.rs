@@ -5,9 +5,11 @@ pub mod cmd_cluster;
 pub mod cmd_download_accs;
 pub mod cmd_download_fastas;
 pub mod cmd_emit_read_names;
+pub mod cmd_k2;
 pub mod cmd_report_species;
 pub mod cmd_taxosplit;
 mod filter_read;
+pub mod k2_utils;
 mod locus_tracker;
 pub mod taxonomy;
 
