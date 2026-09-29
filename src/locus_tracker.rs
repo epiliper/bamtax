@@ -1,7 +1,7 @@
 use crate::cmd_cluster::Range;
 use anyhow::Error;
 use rust_htslib::bam::HeaderView;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
@@ -20,13 +20,13 @@ pub struct AlignmentReport {
     pub alns: HashMap<String, (Vec<Alignment>, HashSet<i32>)>,
 }
 
-#[derive(Serialize)]
-struct AlignmentReportRow<'a> {
-    source: &'a str,
-    target: &'a str,
-    depth: usize,
-    loci: usize,
-    references: String,
+#[derive(Serialize, Deserialize)]
+pub struct AlignmentReportRow {
+    pub source: String,
+    pub target: String,
+    pub depth: usize,
+    pub loci: usize,
+    pub references: String,
 }
 
 impl AlignmentReport {
@@ -48,8 +48,8 @@ impl AlignmentReport {
             references.sort();
 
             writer.serialize(AlignmentReportRow {
-                source,
-                target,
+                source: source.to_string(),
+                target: target.to_string(),
                 depth: alignments.iter().map(|alignment| alignment.depth).sum(),
                 loci: alignments.len(),
                 references: references.join(";"),

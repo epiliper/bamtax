@@ -2,7 +2,10 @@
 use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Error};
 use clap::Parser;
-use rust_htslib::bam::{HeaderView, IndexedReader, Read, Reader, Record, ext::BamRecordExtensions};
+use rust_htslib::bam::{
+    Header, HeaderView, IndexedReader, Read, Reader, Record, Writer as BamWriter, ext::BamRecordExtensions,
+    index::build as build_bam_index,
+};
 use std::fs::File;
 use std::io::{self, Write};
 
@@ -122,14 +125,17 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
     let mut writer = csv::WriterBuilder::new().delimiter(args.delimiter).from_writer(output);
 
     // we expect headers across all input files to match. We just grab the first one.
-    let header = Reader::from_path(&args.inputs[0])
-        .expect("create header sample reader")
-        .header()
-        .clone();
+    let header = Header::from_template(
+        Reader::from_path(&args.inputs[0])
+            .expect("create header sample reader")
+            .header(),
+    );
 
-    let headercount = header.target_count();
-    let headerfirst = tid2name(&header, 0)?;
-    let headerlast = tid2name(&header, i32::try_from(headercount)?.saturating_sub(1))?;
+    let headerview = HeaderView::from_header(&header);
+
+    let headercount = headerview.target_count();
+    let headerfirst = tid2name(&headerview, 0)?;
+    let headerlast = tid2name(&headerview, i32::try_from(headercount)?.saturating_sub(1))?;
 
     for input in &args.inputs {
         let mut lt = LocusTracker::new();
@@ -153,6 +159,9 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
             std::fs::File::create(format!("{basename}_failed_reads.txt")).context("create failed reads file")?,
         );
 
+        let output_read_path = format!("{basename}_bamtax.bam");
+        let mut read_writer = BamWriter::from_path(&output_read_path, &header, rust_htslib::bam::Format::Bam)?;
+
         let mut rec = Record::new();
         let mut i = 0;
         let mut n_passed = 0;
@@ -170,7 +179,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
             }
 
             if filter_read(&rec, args.min_frac_read_aligned, args.min_frac_read_matched).context("filter record")? {
-                let taxid = record_get_taxid(&header, &rec).expect("get read taxid");
+                let taxid = record_get_taxid(&headerview, &rec).expect("get read taxid");
                 if let Some(species) = taxonomy.species(taxid) {
                     seq_len += rec.seq_len();
                     n_passed += 1;
@@ -182,13 +191,15 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
                             start: rec.pos(),
                             end: rec.reference_end() - 1,
                         },
-                    )
+                    );
+
+                    read_writer.write(&rec)?;
                 } else {
                     eprintln!("Warning: failed to find species for taxon id {}. Skipping...", taxid);
 
                     failed_read_writer.write(rec.qname())?;
                     failed_read_writer.write(b"\t")?;
-                    failed_read_writer.write(tid2name(&header, rec.tid())?)?;
+                    failed_read_writer.write(tid2name(&headerview, rec.tid())?)?;
                     failed_read_writer.write(b"\n")?;
                 }
             }
@@ -199,13 +210,20 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         eprintln!("processed {i} records from {input}");
 
         let report = lt.resolve(args.min_loci_per_call, seq_len / n_passed);
-        if let Err(error) = report.serialize(&mut writer, reader.header(), input) {
+        if let Err(error) = report.serialize(&mut writer, reader.header(), basename) {
             if to_stdout && is_broken_pipe(&error) {
                 return Ok(());
             }
 
             return Err(error);
         }
+
+        build_bam_index(
+            &output_read_path,
+            None,
+            rust_htslib::bam::index::Type::Bai,
+            num_cpus::get() as u32,
+        )?;
     }
 
     Ok(())

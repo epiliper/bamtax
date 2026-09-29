@@ -1,14 +1,17 @@
 mod assembly_dir_iterator;
+pub mod bam_utils;
 pub mod cmd_build_db;
 pub mod cmd_check_taxonomy;
 pub mod cmd_cluster;
 pub mod cmd_download_accs;
 pub mod cmd_download_fastas;
 pub mod cmd_emit_read_names;
-pub mod cmd_k2;
+pub mod cmd_extract;
+// pub mod cmd_k2_split;
 pub mod cmd_report_species;
 pub mod cmd_taxosplit;
 mod filter_read;
+pub mod k2_taxonomy;
 pub mod k2_utils;
 mod locus_tracker;
 pub mod taxonomy;
@@ -20,6 +23,7 @@ use cmd_cluster::{ClusterArgs, cluster_main};
 use cmd_download_accs::{DownloadAccessionsArgs, download_accs_main};
 use cmd_download_fastas::{DownloadFastasArgs, download_fastas_main};
 use cmd_emit_read_names::{EmitNamesArgs, emit_names_main};
+use cmd_extract::{ExtractArgs, extract_main};
 use cmd_report_species::{ReportSpeciesArgs, report_species_main};
 use cmd_taxosplit::{TaxoSplitArgs, taxosplit_main};
 
@@ -33,6 +37,7 @@ enum Commands {
     DownloadAccs(DownloadAccessionsArgs),
     DownloadFastas(DownloadFastasArgs),
     TaxoSplit(TaxoSplitArgs),
+    Extract(ExtractArgs),
 }
 
 #[derive(Parser)]
@@ -53,6 +58,7 @@ pub fn main() {
         Commands::DownloadAccs(args) => download_accs_main(args),
         Commands::DownloadFastas(args) => download_fastas_main(args),
         Commands::TaxoSplit(args) => taxosplit_main(args),
+        Commands::Extract(args) => extract_main(args),
     };
 
     if let Err(e) = result {

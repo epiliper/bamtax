@@ -26,7 +26,6 @@ impl K2Taxonomy {
 
         // skip unclassified row.
         if parent.taxid == 0 {
-            // parent = K2ReportRow::try_from(line_iter.next().unwrap().expect("read second line of report").as_str())?;
             if let Some(line) = line_iter.next() {
                 parent = K2ReportRow::try_from(line.expect("Reading second report line").as_str())?;
             } else {
