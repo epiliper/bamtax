@@ -51,7 +51,8 @@ pub fn emit_names_main(args: EmitNamesArgs) -> Result<(), Error> {
             continue;
         }
 
-        if !filter_read(&rec, args.min_frac_read_aligned, args.min_frac_read_matched)? {
+        let cov = filter_read(&rec)?;
+        if cov.frac_aligned() < args.min_frac_read_aligned || cov.frac_matched() < args.min_frac_read_matched {
             continue;
         }
 
@@ -63,10 +64,7 @@ pub fn emit_names_main(args: EmitNamesArgs) -> Result<(), Error> {
 
     writer.flush()?;
 
-    eprintln!(
-        "{n_passed} / {i} records in {} were determined to be legitimate maps",
-        args.input
-    );
+    eprintln!("{n_passed} / {i} records in {} were determined to be legitimate maps", args.input);
 
     Ok(())
 }
