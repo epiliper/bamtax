@@ -119,18 +119,20 @@ pub fn k2_split_main(args: K2SplitArgs) -> Result<(), Error> {
 
     // 1. record which read names belong under which clusters, record genuses detected in report.
     for r2 in r2_iter {
+        let mut out_fastq_names: Vec<String> = vec![];
         for (i, _fastq) in args.fastq.iter().enumerate() {
             let fastq_name =
                 format!("{output_prefix}_{}_{}.fastq{}", r2.row.name, i + 1, if args.gzip { ".gz" } else { "" });
             let writer = FastqOut::from_file(&fastq_name)?;
             group_to_out.entry(r2.row.taxid).or_default().push(writer);
 
-            k2taxonomy.descendants_taxa(r2.row.taxid).filter(|l| l.row.rank == SUB_HIGHEST_RANK_SPLIT_BY).for_each(
-                |g| {
-                    writeln!(report, "{fastq_name}\t{}\t{}", g.row.name, g.row.taxid).expect("writing to report");
-                },
-            )
+            out_fastq_names.push(fastq_name);
         }
+
+        k2taxonomy.descendants_taxa(r2.row.taxid).filter(|l| l.row.rank == SUB_HIGHEST_RANK_SPLIT_BY).for_each(|g| {
+            writeln!(report, "{}\t{}\t{}", out_fastq_names.join(","), g.row.name, g.row.taxid)
+                .expect("writing to report");
+        });
 
         k2taxonomy.get_all_reads_under_node(r2.row.taxid).for_each(|r| {
             reads_to_group.insert(r.read_name.clone(), r2.row.taxid);
