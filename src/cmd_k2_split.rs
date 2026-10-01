@@ -90,7 +90,7 @@ pub struct K2SplitArgs {
     pub output_prefix: Option<String>,
 
     /// input fastq with reads mentioned in report and classification
-    #[arg(short, long, num_args = 1..)]
+    #[arg(short, long, num_args = 1..=2)]
     pub fastq: Vec<String>,
 
     /// whether or not to gzip output fastqs
@@ -112,44 +112,48 @@ pub fn k2_split_main(args: K2SplitArgs) -> Result<(), Error> {
         .unwrap_or(args.report.split_once(".kreport2").expect("report should end in .kreport2").0.to_string());
 
     let mut reads_to_group: HashMap<String, u32> = HashMap::new();
-    let mut group_to_out: HashMap<u32, FastqOut> = HashMap::new();
+    let mut group_to_out: HashMap<u32, Vec<FastqOut>> = HashMap::new();
 
     let r2_iter = k2taxonomy.rank_nodes(HIGHEST_RANK_WE_PULL_READS_FROM);
     let mut report = BufWriter::new(File::create(format!("{output_prefix}_groups.tsv"))?);
 
     // 1. record which read names belong under which clusters, record genuses detected in report.
     for r2 in r2_iter {
-        let fastq_name = format!("{output_prefix}_{}.fastq{}", r2.row.name, if args.gzip { ".gz" } else { "" });
+        for (i, _fastq) in args.fastq.iter().enumerate() {
+            let fastq_name =
+                format!("{output_prefix}_{}_{}.fastq{}", r2.row.name, i + 1, if args.gzip { ".gz" } else { "" });
+            let writer = FastqOut::from_file(&fastq_name)?;
+            group_to_out.entry(r2.row.taxid).or_default().push(writer);
 
-        let writer = FastqOut::from_file(&fastq_name)?;
-        group_to_out.insert(r2.row.taxid, writer);
+            k2taxonomy.descendants_taxa(r2.row.taxid).filter(|l| l.row.rank == SUB_HIGHEST_RANK_SPLIT_BY).for_each(
+                |g| {
+                    writeln!(report, "{fastq_name}\t{}\t{}", g.row.name, g.row.taxid).expect("writing to report");
+                },
+            )
+        }
 
         k2taxonomy.get_all_reads_under_node(r2.row.taxid).for_each(|r| {
             reads_to_group.insert(r.read_name.clone(), r2.row.taxid);
         });
-
-        k2taxonomy.descendants_taxa(r2.row.taxid).filter(|l| l.row.rank == SUB_HIGHEST_RANK_SPLIT_BY).for_each(|g| {
-            writeln!(report, "{fastq_name}\t{}\t{}", g.row.name, g.row.taxid).expect("writing to report");
-        })
     }
 
     report.flush()?;
 
     // 2. write reads to their separate files.
-    for fastq in args.fastq {
-        let mut input = FastqReader::new(FastqIn::from_file(&fastq)?);
+    for (i, fastq) in args.fastq.iter().enumerate() {
+        let mut input = FastqReader::new(FastqIn::from_file(fastq)?);
         while let Some(rec) = input.next() {
             let rec = rec?;
             let id = rec.id()?;
 
             if let Some(group) = reads_to_group.get(id) {
-                let writer = group_to_out.get_mut(group).expect("getting writer");
+                let writer = group_to_out.get_mut(group).expect("getting writer").get_mut(i).unwrap();
                 write_fastq(writer, id.as_bytes(), rec.seq(), rec.qual())?;
             }
         }
     }
 
-    for writer in group_to_out.values_mut() {
+    for writer in group_to_out.values_mut().flatten() {
         writer.flush()?;
     }
 
