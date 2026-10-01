@@ -161,7 +161,15 @@ pub struct K2ClassificationRow {
     pub status: K2ClassificationStatus,
     pub read_name: String,
     pub assigned_taxid: u32,
-    pub hits: Vec<K2HitDesc>,
+    pub hits_1: Vec<K2HitDesc>,
+    pub hits_2: Vec<K2HitDesc>,
+}
+
+impl K2ClassificationRow {
+    pub fn get_taxid_kmer_count(&self, taxid: u32, r2: bool) -> usize {
+        let mate = if r2 { &self.hits_2 } else { &self.hits_1 };
+        mate.iter().map(|hit| if hit.hit == K2HitType::TaxonId(taxid) { hit.n_kmers } else { 0 }).sum::<usize>()
+    }
 }
 
 impl TryFrom<&str> for K2ClassificationRow {
@@ -184,17 +192,21 @@ impl TryFrom<&str> for K2ClassificationRow {
             bail!("invalid classification status: {}", fields[0]);
         }
 
-        let hits = fields[4]
-            .split_whitespace()
-            .filter(|token| *token != "|:|")
-            .map(K2HitDesc::try_from)
-            .collect::<Result<Vec<_>, _>>()?;
+        let (r1, r2) = if let Some((hits1, hits2)) = fields[4].split_once("|:|") {
+            (
+                hits1.split_whitespace().map(K2HitDesc::try_from).collect::<Result<Vec<_>, _>>()?,
+                hits2.split_whitespace().map(K2HitDesc::try_from).collect::<Result<Vec<_>, _>>()?,
+            )
+        } else {
+            (fields[4].split_whitespace().map(K2HitDesc::try_from).collect::<Result<Vec<_>, _>>()?, vec![])
+        };
 
         Ok(Self {
             status: K2ClassificationStatus::try_from(status)?,
             read_name: fields[1].to_owned(),
             assigned_taxid: fields[2].parse().context("invalid classification taxid")?,
-            hits,
+            hits_1: r1,
+            hits_2: r2,
         })
     }
 }
@@ -229,8 +241,8 @@ mod tests {
         assert_eq!(row.status, K2ClassificationStatus::Classified);
         assert_eq!(row.read_name, "read-1");
         assert_eq!(row.assigned_taxid, 123);
-        assert_eq!(row.hits.len(), 4);
-        assert_eq!(row.hits[0].hit, K2HitType::TaxonId(123));
-        assert_eq!(row.hits[3].hit, K2HitType::TaxonId(456));
+        assert_eq!(row.hits_1.len() + row.hits_2.len(), 4);
+        assert_eq!(row.hits_1[0].hit, K2HitType::TaxonId(123));
+        assert_eq!(row.hits_2[1].hit, K2HitType::TaxonId(456));
     }
 }

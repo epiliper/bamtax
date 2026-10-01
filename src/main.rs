@@ -15,6 +15,7 @@ mod filter_read;
 mod k2_taxonomy;
 mod k2_utils;
 mod locus_tracker;
+mod sam_merge_buffer;
 mod taxonomy;
 
 use clap::{Parser, Subcommand};

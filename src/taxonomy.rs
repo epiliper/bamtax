@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use std::cell::UnsafeCell;
 
 #[derive(Debug, Eq)]
 pub struct Taxon {
@@ -36,10 +37,11 @@ pub enum Rank {
 }
 
 #[derive(Debug)]
+// Do not use with multiple threads.
 pub struct Taxonomy {
     nodes: HashMap<u32, Taxon>,
-    species_memo: HashMap<u32, Option<u32>>,
-    genus_memo: HashMap<u32, Option<u32>>,
+    species_memo: UnsafeCell<HashMap<u32, Option<u32>>>,
+    genus_memo: UnsafeCell<HashMap<u32, Option<u32>>>,
     children: HashMap<u32, Vec<u32>>,
 }
 
@@ -81,40 +83,42 @@ impl<'a> Taxonomy {
         Some(lineage)
     }
 
-    pub fn species(&mut self, tax_id: u32) -> Option<&Taxon> {
+    pub fn species(&self, tax_id: u32) -> Option<&Taxon> {
         self.lookup(tax_id, Rank::Species)
     }
 
-    pub fn genus(&mut self, tax_id: u32) -> Option<&Taxon> {
+    pub fn genus(&self, tax_id: u32) -> Option<&Taxon> {
         self.lookup(tax_id, Rank::Genus)
     }
 
-    pub fn lookup(&mut self, tax_id: u32, rank: Rank) -> Option<&Taxon> {
-        let (memo, name) = match rank {
-            Rank::Species => (&mut self.species_memo, "species"),
-            Rank::Genus => (&mut self.genus_memo, "genus"),
-        };
+    pub fn lookup(&self, tax_id: u32, rank: Rank) -> Option<&Taxon> {
+        unsafe {
+            let (memo, name) = match rank {
+                Rank::Species => (self.species_memo.get().as_mut().unwrap(), "species"),
+                Rank::Genus => (self.genus_memo.get().as_mut().unwrap(), "genus"),
+            };
 
-        let mut seen = HashSet::new();
-        let mut current = tax_id;
+            let mut seen = HashSet::new();
+            let mut current = tax_id;
 
-        loop {
-            if !seen.insert(current) {
-                memo.insert(tax_id, None);
-                return None;
+            loop {
+                if !seen.insert(current) {
+                    memo.insert(tax_id, None);
+                    return None;
+                }
+
+                let taxon = self.nodes.get(&current)?;
+
+                if taxon.rank == name {
+                    memo.insert(tax_id, Some(taxon.tax_id));
+                    return Some(taxon);
+                }
+                if taxon.parent_tax_id == current {
+                    memo.insert(tax_id, None);
+                    return None;
+                }
+                current = taxon.parent_tax_id;
             }
-
-            let taxon = self.nodes.get(&current)?;
-
-            if taxon.rank == name {
-                memo.insert(tax_id, Some(taxon.tax_id));
-                return Some(taxon);
-            }
-            if taxon.parent_tax_id == current {
-                memo.insert(tax_id, None);
-                return None;
-            }
-            current = taxon.parent_tax_id;
         }
     }
 
@@ -137,8 +141,8 @@ impl<'a> Taxonomy {
     fn from_readers(nodes: impl BufRead, names: impl BufRead) -> Result<Self> {
         let mut taxonomy = Self {
             nodes: HashMap::new(),
-            species_memo: HashMap::new(),
-            genus_memo: HashMap::new(),
+            species_memo: UnsafeCell::new(HashMap::new()),
+            genus_memo: UnsafeCell::new(HashMap::new()),
             children: HashMap::new(),
         };
 
@@ -147,28 +151,16 @@ impl<'a> Taxonomy {
             let mut fields = line.split("\t|\t");
             let tax_id = parse_tax_id(fields.next(), "tax_id", "nodes.dmp", line_number)?;
             let parent_tax_id = parse_tax_id(fields.next(), "parent tax_id", "nodes.dmp", line_number)?;
-            let rank = fields
-                .next()
-                .with_context(|| format!("nodes.dmp line {} has no rank", line_number + 1))?;
+            let rank = fields.next().with_context(|| format!("nodes.dmp line {} has no rank", line_number + 1))?;
 
-            taxonomy.nodes.insert(
-                tax_id,
-                Taxon {
-                    tax_id,
-                    parent_tax_id,
-                    rank: rank.to_owned(),
-                    name: String::new(),
-                },
-            );
+            taxonomy.nodes.insert(tax_id, Taxon { tax_id, parent_tax_id, rank: rank.to_owned(), name: String::new() });
         }
 
         for (line_number, line) in names.lines().enumerate() {
             let line = line.with_context(|| format!("read names.dmp line {}", line_number + 1))?;
             let mut fields = line.split("\t|\t");
             let tax_id = parse_tax_id(fields.next(), "tax_id", "names.dmp", line_number)?;
-            let name = fields
-                .next()
-                .with_context(|| format!("names.dmp line {} has no name", line_number + 1))?;
+            let name = fields.next().with_context(|| format!("names.dmp line {} has no name", line_number + 1))?;
             let _unique_name = fields.next();
             let name_class = fields
                 .next()

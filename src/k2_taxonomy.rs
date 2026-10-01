@@ -21,10 +21,13 @@ impl std::fmt::Display for K2Taxon {
 }
 
 #[derive(Default, Debug)]
+// NOTE: read names being stored twice, once in K2ClassificationRow and again in
+// read_name_to_read_id
 pub struct K2Taxonomy {
     pub tree: HashMap<u32, K2Taxon>,
     pub read_id_to_read: HashMap<u32, K2ClassificationRow>,
     pub taxid_to_direct_reads: HashMap<u32, Vec<u32>>,
+    pub read_name_to_read_id: HashMap<Vec<u8>, u32>,
 }
 
 impl<'a> K2Taxonomy {
@@ -94,6 +97,10 @@ impl<'a> K2Taxonomy {
         })
     }
 
+    pub fn get_kmer_calls(&self, read_name: &[u8]) -> Option<&K2ClassificationRow> {
+        self.read_name_to_read_id.get(read_name).and_then(|id| self.read_id_to_read.get(id))
+    }
+
     pub fn get_all_reads_under_node(&'a self, taxid: u32) -> impl Iterator<Item = &'a K2ClassificationRow> {
         let mut ids: &[u32] = &[];
         let mut id_index = 0;
@@ -148,6 +155,7 @@ impl<'a> K2Taxonomy {
             let idx = u32::try_from(i)?;
             i += 1;
 
+            assert!(self.read_name_to_read_id.insert(row.read_name.as_bytes().to_vec(), idx).is_none());
             self.taxid_to_direct_reads.entry(row.assigned_taxid).or_default().push(idx);
 
             self.read_id_to_read.insert(idx, row);
@@ -294,7 +302,7 @@ mod tests {
     #[test]
     fn rejects_report_count_mismatches() {
         let classifications =
-            CLASSIFICATIONS.to_string() + "C\tgenus-read\t10\t100\t10:2\nC\textra-read\t10\t100\t10:2\n";
+            CLASSIFICATIONS.to_string() + "C\tgenus-read2\t10\t100\t10:2\nC\textra-read\t10\t100\t10:2\n";
 
         let error = K2Taxonomy::build(Cursor::new(classifications), Cursor::new(REPORT.as_bytes())).unwrap_err();
 

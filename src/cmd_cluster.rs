@@ -1,20 +1,18 @@
 #![allow(clippy::unused_io_amount)]
 use crate::taxonomy::Taxonomy;
-use anyhow::{Context, Error};
+use anyhow::{Context, Error, bail};
 use clap::Parser;
 use rust_htslib::bam::{
-    Header, HeaderView, IndexedReader, Read, Reader, Record, Writer as BamWriter, ext::BamRecordExtensions,
-    index::build as build_bam_index,
+    Header, HeaderView, Read, Reader as BamReader, Record, Writer as BamWriter, ext::BamRecordExtensions,
+    index::build as build_bam_index, record::Aux,
 };
 use std::fs::File;
-use std::hash::{Hash, Hasher};
-use std::io::{self, Write};
+use std::io::{self, BufReader, Write};
 
 use crate::filter_read::filter_read;
 use crate::k2_taxonomy::K2Taxonomy;
 use crate::locus_tracker::LocusTracker;
-
-use std::collections::{HashSet, VecDeque};
+use crate::sam_merge_buffer::{ReadBucket, SamMergeBuffer};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Range {
@@ -49,7 +47,13 @@ pub struct ClusterArgs {
     pub taxonomy_dir: String,
 
     #[arg(required = true, num_args = 1..)]
-    pub inputs: Vec<String>,
+    pub bams: Vec<String>,
+
+    #[arg(required = true, num_args = 1..)]
+    pub k2_reports: Vec<String>,
+
+    #[arg(required = true, num_args = 1..)]
+    pub k2_classifications: Vec<String>,
 
     #[arg(short = 'm', default_value_t = 3)]
     pub min_loci_per_call: usize,
@@ -101,173 +105,182 @@ pub fn tid2name(header: &HeaderView, tid: i32) -> Result<&[u8], Error> {
     Ok(header.tid2name(u32::try_from(tid)?))
 }
 
-pub fn cursory_header_equivalence_check(
-    other: &HeaderView,
-    headerfirst: &[u8],
-    headerlast: &[u8],
-    targetcount: u32,
-) -> Result<bool, Error> {
-    Ok(other.target_count() == targetcount
-        && tid2name(other, 0)? == headerfirst
-        && tid2name(other, i32::try_from(targetcount.saturating_sub(1))?)? == headerlast)
-}
+const READ_SRC_TAG: &str = "RG";
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct ReadHash {
-    name_hash: u64,
-    source_hash: u64,
-}
-
-impl ReadHash {
-    pub fn from_read_and_source(rec: &Record, source: &str) -> Self {
-        let mut hash = std::hash::DefaultHasher::new();
-        rec.qname().hash(&mut hash);
-        let name_hash = hash.finish();
-
-        let mut hash = std::hash::DefaultHasher::new();
-        source.hash(&mut hash);
-        let source_hash = hash.finish();
-
-        Self { name_hash, source_hash }
+pub fn get_read_src(record: &Record) -> &str {
+    match record.aux(READ_SRC_TAG.as_bytes()) {
+        Ok(Aux::String(str)) => str,
+        Ok(_) => "0",
+        _ => panic!("Read source tag {READ_SRC_TAG} overwritten!"),
     }
 }
 
-pub struct ReadBucket {
-    pub hash: ReadHash,
-    pub rec: Record,
-    pub mate: Option<Record>,
-}
-
-#[derive(Default)]
-pub struct ReadTracker {
-    q: VecDeque<ReadBucket>,
-    held: HashSet<ReadHash>,
-}
-
-impl ReadTracker {
-    pub fn intake(&mut self, record: &Record, src: &str) -> impl Iterator<Item = ReadBucket> {
-        let hash = ReadHash::from_read_and_source(record, src);
-        let nodes = if self.held.contains(&hash) {
-            self.update_mate(record, hash);
-            VecDeque::new()
-        } else {
-            std::mem::take(&mut self.q)
-        };
-        nodes.into_iter()
+/// Given read pairs from a different alignment files (one file = one bucket), tie-break alignments
+/// between mates in each bucket, then tie-break between buckets. Return the winning bucket and its hit
+/// taxid if one was conclusively determined.
+pub fn cluster_read_buckets(
+    read_buckets: Vec<ReadBucket>,
+    k2tax: &K2Taxonomy,
+    headerview: &HeaderView,
+    min_frac_aligned: f32,
+    min_frac_matched: f32,
+) -> Result<Option<(ReadBucket, u32)>, Error> {
+    if read_buckets.is_empty() {
+        return Ok(None);
     }
 
-    pub fn update_mate(&mut self, rec: &Record, hash: ReadHash) {
-        for node in self.q.iter_mut() {
-            if node.hash == hash {
-                assert!(node.mate.is_none());
-                node.mate = Some(rec.clone());
-                return;
-            }
+    let mut max_score = 0.0_f32;
+    let mut winning_hit: u32 = 0;
+    let mut winning_bucket: Option<ReadBucket> = None;
+
+    for bucket in read_buckets {
+        let r1_cov = filter_read(&bucket.rec)?;
+        let r2_cov = bucket.mate.as_ref().map(filter_read).transpose()?;
+
+        let checks =
+            [Some((r1_cov, &bucket.rec, false)), r2_cov.map(|r2_cov| (r2_cov, bucket.mate.as_ref().unwrap(), true))];
+
+        let (pair_hit, pair_score) = checks
+            .iter()
+            .flatten()
+            .map(|(cov, read, r2)| {
+                if cov.frac_aligned() >= min_frac_aligned && cov.frac_matched() >= min_frac_matched {
+                    // get the taxid the mapper called
+                    let map = record_get_taxid(headerview, read).expect("getting read taxonid");
+
+                    // scale the mapper's call the number of kmers from that read that match its
+                    // taxid.
+                    let kmer_n = k2tax.get_kmer_calls(read.qname()).map(|row| row.get_taxid_kmer_count(map, *r2));
+                    (map, cov.frac_matched() * kmer_n.unwrap_or(0) as f32)
+                } else {
+                    (0_u32, f32::MIN) // below alignment thresholds
+                }
+            })
+            .max_by(|(_ahit, ascore), (_bhit, bscore)| {
+                bscore.partial_cmp(ascore).expect("Invalid floating point score comparison")
+            })
+            .unwrap();
+
+        // TODO: consider if epsilon is needed here for floating point comparisons?
+        if pair_score > max_score {
+            winning_bucket = Some(bucket);
+            winning_hit = pair_hit;
+            max_score = pair_score;
         }
-
-        panic!("Attempted to update mate of non-existent read")
     }
 
-    pub fn flush(&mut self) -> impl Iterator<Item = ReadBucket> {
-        std::mem::take(&mut self.q).into_iter()
-    }
+    Ok(winning_bucket.map(|bucket| (bucket, winning_hit)))
 }
-
-// #[inline(always)]
-// fn process_read_bucket(
-//     read_bucket: &mut ReadBucket,
-//     taxonomy: &mut Taxonomy,
-//     k2: &mut K2Taxonomy,
-//     min_frac_aligned: f32,
-//     min_frac_matched: f32,
-// ) {
-//     // let c1 = filter_read()
-// }
 
 pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
-    let mut taxonomy = Taxonomy::from_dir(&args.taxonomy_dir).context("create taxonomy")?;
+    if std::collections::HashSet::from([args.bams.len(), args.k2_reports.len(), args.k2_classifications.len()]).len()
+        != 1
+    {
+        bail!("Mismatch between Number of BAMs, kraken2 reports, and kraken2 classifcations");
+    }
+
+    let taxonomy = Taxonomy::from_dir(&args.taxonomy_dir).context("create taxonomy")?;
+
     let to_stdout = args.output == "-";
     let output: Box<dyn Write> =
         if to_stdout { Box::new(io::stdout()) } else { Box::new(File::create(&args.output).context("create output")?) };
-
     let mut writer = csv::WriterBuilder::new().delimiter(args.delimiter).from_writer(output);
 
-    // we expect headers across all input files to match. We just grab the first one.
-    let header =
-        Header::from_template(Reader::from_path(&args.inputs[0]).expect("create header sample reader").header());
-
-    let headerview = HeaderView::from_header(&header);
-
-    let headercount = headerview.target_count();
-    let headerfirst = tid2name(&headerview, 0)?;
-    let headerlast = tid2name(&headerview, i32::try_from(headercount)?.saturating_sub(1))?;
-
-    for input in &args.inputs {
+    for ((bam, k2_report), k2_classification) in
+        std::iter::zip(&args.bams, &args.k2_reports).zip(&args.k2_classifications)
+    {
+        let mut merge = SamMergeBuffer::default();
+        let basename = bam.rsplit_once(".").unwrap_or((bam, "")).0;
         let mut lt = LocusTracker::new();
+        let k2taxon =
+            K2Taxonomy::build(BufReader::new(File::open(k2_classification)?), BufReader::new(File::open(k2_report)?))?;
 
-        let mut reader = IndexedReader::from_path(input).expect("create reader");
-        let mut seq_len = 0;
+        let mut reader = BamReader::from_path(bam).expect("create reader");
         reader.set_threads(4).context("set reader threads")?;
-        reader.fetch(".").context("fetch everything")?;
-
-        if !cursory_header_equivalence_check(reader.header(), headerfirst, headerlast, headercount)? {
-            anyhow::bail!(
-                "File {} has a different header from the first input file {}! All BAM headers should be the same.",
-                input,
-                &args.inputs[0],
-            )
-        }
-
-        let basename = input.rsplit_once(".").unwrap_or((input, "")).0;
+        let header = reader.header();
+        let mut seq_len = 0;
 
         let mut failed_read_writer = std::io::BufWriter::new(
             std::fs::File::create(format!("{basename}_failed_reads.txt")).context("create failed reads file")?,
         );
-
         let output_read_path = format!("{basename}_bamtax.bam");
-        let mut read_writer = BamWriter::from_path(&output_read_path, &header, rust_htslib::bam::Format::Bam)?;
+        let mut read_writer =
+            BamWriter::from_path(&output_read_path, &Header::from_template(header), rust_htslib::bam::Format::Bam)?;
 
         let mut rec = Record::new();
         let mut i = 0;
         let mut n_passed = 0;
 
+        // copy header for now.
+        let header = header.clone();
+
+        /////////////// BEGIN CLOSURE
+        let mut handle_buckets = |buckets: Vec<ReadBucket>| -> Result<(), Error> {
+            if let Some((bucket, call_taxid)) = cluster_read_buckets(
+                buckets,
+                &k2taxon,
+                &header,
+                args.min_frac_read_aligned,
+                args.min_frac_read_matched,
+            )? {
+                let reads = [Some(bucket.rec), bucket.mate];
+
+                if let Some(species) = taxonomy.species(call_taxid) {
+                    let hit_taxon = taxonomy.get(call_taxid).expect("Getting name for hit");
+
+                    for rec in reads.iter().flatten() {
+                        lt.add_and_hash(
+                            &species.name,
+                            &hit_taxon.name,
+                            Range { start: rec.pos(), end: rec.reference_end() - 1 },
+                        );
+
+                        seq_len += rec.seq_len();
+                        n_passed += 1;
+                        read_writer.write(rec)?;
+                    }
+                } else {
+                    eprintln!("Warning: failed to find species for taxon id {}. Skipping...", call_taxid);
+
+                    for rec in reads.iter().flatten() {
+                        failed_read_writer.write(rec.qname())?;
+                        failed_read_writer.write(b"\t")?;
+                        failed_read_writer.write(tid2name(&header, rec.tid())?)?;
+                        failed_read_writer.write(b"\n")?;
+                    }
+                }
+            }
+
+            Ok(())
+        };
+        /////////////// END CLOSURE
+
         while let Some(result) = reader.read(&mut rec) {
             result.context("read record")?;
-
-            i += 1;
-            if i % 1000 == 0 {
-                eprintln!("processed {i} records from {input}");
-            }
 
             if rec.is_unmapped() || rec.is_secondary() || rec.is_supplementary() {
                 continue;
             }
 
-            let cover = filter_read(&rec).context("filter record")?;
-            if cover.frac_aligned() >= args.min_frac_read_aligned && cover.frac_matched() >= args.min_frac_read_matched
-            {
-                let taxid = record_get_taxid(&headerview, &rec).expect("get read taxid");
-                if let Some(species) = taxonomy.species(taxid) {
-                    seq_len += rec.seq_len();
-                    n_passed += 1;
-
-                    lt.add(&species.name, rec.tid(), Range { start: rec.pos(), end: rec.reference_end() - 1 });
-
-                    read_writer.write(&rec)?;
-                } else {
-                    eprintln!("Warning: failed to find species for taxon id {}. Skipping...", taxid);
-
-                    failed_read_writer.write(rec.qname())?;
-                    failed_read_writer.write(b"\t")?;
-                    failed_read_writer.write(tid2name(&headerview, rec.tid())?)?;
-                    failed_read_writer.write(b"\n")?;
-                }
+            if let Some(buckets) = merge.intake(&rec, get_read_src(&rec)) {
+                handle_buckets(buckets)?;
             }
+
+            i += 1;
+            if i % 1000 == 0 {
+                eprintln!("processed {i} records from {bam}");
+            }
+        }
+
+        let remainder = merge.flush();
+        if !remainder.is_empty() {
+            i += remainder.len();
+            handle_buckets(remainder)?;
         }
 
         failed_read_writer.flush().expect("writer flush");
 
-        eprintln!("processed {i} records from {input}");
+        eprintln!("processed {i} records from {bam}");
 
         let report = lt.resolve(args.min_loci_per_call, seq_len / n_passed);
         if let Err(error) = report.serialize(&mut writer, reader.header(), basename) {

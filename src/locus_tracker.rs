@@ -3,11 +3,12 @@ use anyhow::Error;
 use rust_htslib::bam::HeaderView;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 
 #[derive(Clone)]
 pub struct Alignment {
-    pub tid: i32,
+    pub tid: u64,
     pub depth: usize,
     pub span: Range,
 }
@@ -17,7 +18,7 @@ pub struct LocusTracker {
 }
 
 pub struct AlignmentReport {
-    pub alns: HashMap<String, (Vec<Alignment>, HashSet<i32>)>,
+    pub alns: HashMap<String, (Vec<Alignment>, HashSet<u64>)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -40,10 +41,8 @@ impl AlignmentReport {
         targets.sort_by_key(|(target, _)| *target);
 
         for (target, (alignments, tids)) in targets {
-            let mut references: Vec<_> = tids
-                .iter()
-                .map(|tid| String::from_utf8_lossy(header.tid2name(*tid as u32)).into_owned())
-                .collect();
+            let mut references: Vec<_> =
+                tids.iter().map(|tid| String::from_utf8_lossy(header.tid2name(*tid as u32)).into_owned()).collect();
 
             references.sort();
 
@@ -67,19 +66,21 @@ impl LocusTracker {
     }
 
     pub fn add(&mut self, target: impl ToString, tid: i32, range: Range) {
-        self.map.entry(target.to_string()).or_default().push(Alignment {
-            tid,
-            span: range,
-            depth: 1,
-        });
+        self.map.entry(target.to_string()).or_default().push(Alignment { tid: tid as u64, span: range, depth: 1 });
+    }
+
+    pub fn add_and_hash(&mut self, target: impl ToString, tid: impl Hash, range: Range) {
+        let mut hasher = DefaultHasher::new();
+        tid.hash(&mut hasher);
+        let tid_hash = hasher.finish();
+
+        self.map.entry(target.to_string()).or_default().push(Alignment { tid: tid_hash, span: range, depth: 1 });
     }
 
     pub fn resolve(&mut self, min_calls_per_loci: usize, read_len: usize) -> AlignmentReport {
         assert!(read_len > 0);
 
-        let mut report = AlignmentReport {
-            alns: HashMap::with_capacity(self.map.len()),
-        };
+        let mut report = AlignmentReport { alns: HashMap::with_capacity(self.map.len()) };
 
         for (k, v) in self.map.iter_mut() {
             v.sort_by(|a, b| a.span.start.cmp(&b.span.start).then(a.span.end.cmp(&b.span.end)));
@@ -157,11 +158,7 @@ mod test {
         assert_spans(
             &report,
             "1",
-            &[
-                Range { start: 0, end: 10 },
-                Range { start: 20, end: 30 },
-                Range { start: 40, end: 50 },
-            ],
+            &[Range { start: 0, end: 10 }, Range { start: 20, end: 30 }, Range { start: 40, end: 50 }],
         );
     }
 
@@ -244,10 +241,7 @@ mod test {
         report.serialize(&mut writer, &header, "sample.bam").unwrap();
 
         let output = String::from_utf8(writer.into_inner().unwrap()).unwrap();
-        assert_eq!(
-            output,
-            "source\ttarget\tdepth\tloci\treferences\nsample.bam\tspecies\t1\t1\tref-a\n"
-        );
+        assert_eq!(output, "source\ttarget\tdepth\tloci\treferences\nsample.bam\tspecies\t1\t1\tref-a\n");
     }
 
     fn test_header() -> HeaderView {
