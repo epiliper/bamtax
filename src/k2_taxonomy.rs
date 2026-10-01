@@ -58,17 +58,22 @@ impl<'a> K2Taxonomy {
             while row.depth < queue.front().unwrap().row.depth {
                 // we unwrap here because we expect the root (taxid = 1) to remain always
                 let mut cur = queue.pop_front().unwrap();
-                cur.parent = queue.front().unwrap().row.taxid;
+                cur.parent = queue.iter().find(|f| f.row.depth < cur.row.depth).unwrap().row.taxid;
                 self.tree.insert(cur.row.taxid, cur);
             }
 
-            let front = queue.front().unwrap();
+            // let front = queue.front().unwrap();
+            let parent = queue.iter().find(|f| f.row.depth < row.depth).unwrap();
 
-            queue.push_front(K2Taxon { parent: front.row.taxid, row, children: vec![], index: i + 1 })
+            queue.push_front(K2Taxon { parent: parent.row.taxid, row, children: vec![], index: i + 1 })
         }
 
         while let Some(mut cur) = queue.pop_front() {
-            cur.parent = if let Some(parent) = queue.front() { parent.row.taxid } else { cur.row.taxid };
+            cur.parent = if let Some(parent) = queue.iter().find(|f| f.row.depth < cur.row.depth) {
+                parent.row.taxid
+            } else {
+                cur.row.taxid
+            };
             self.tree.insert(cur.row.taxid, cur);
         }
 
