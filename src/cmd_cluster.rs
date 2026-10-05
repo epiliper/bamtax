@@ -3,11 +3,10 @@ use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Error, bail};
 use clap::Parser;
 use rust_htslib::bam::{
-    Header, HeaderView, Read, Reader as BamReader, Record, Writer as BamWriter, ext::BamRecordExtensions,
-    index::build as build_bam_index, record::Aux,
+    Header, HeaderView, Read, Reader as BamReader, Record, Writer as BamWriter, ext::BamRecordExtensions, record::Aux,
 };
 use std::fs::File;
-use std::io::{self, BufReader, Write};
+use std::io::{self, BufReader, BufWriter, Write};
 
 use crate::filter_read::filter_read;
 use crate::k2_taxonomy::K2Taxonomy;
@@ -49,11 +48,11 @@ pub struct ClusterArgs {
     #[arg(short, long, required = true, num_args = 1..)]
     pub bams: Vec<String>,
 
-    #[arg(short, long, required = true, num_args = 1..)]
-    pub k2_reports: Vec<String>,
+    #[arg(short, long, required = false, num_args = 1..)]
+    pub k2_reports: Option<Vec<String>>,
 
-    #[arg(short, long, required = true, num_args = 1..)]
-    pub k2_classifications: Vec<String>,
+    #[arg(short, long, required = false, num_args = 1..)]
+    pub k2_classifications: Option<Vec<String>>,
 
     #[arg(short = 'm', default_value_t = 3)]
     pub min_loci_per_call: usize,
@@ -84,16 +83,6 @@ pub fn taxid_from_id_str(id: &str) -> Result<u32, Error> {
 
     let digits = split.bytes().take_while(|b| b.is_ascii_digit()).collect::<Vec<u8>>();
     std::str::from_utf8(digits.as_slice()).expect("invalid taxid string").parse::<u32>().map_err(|e| anyhow::anyhow!(e))
-
-    // if let Some((_header, meta)) = id.split_once("|taxid:") {
-    //     let digits = meta.bytes().take_while(|b| b.is_ascii_digit()).collect::<Vec<u8>>();
-    //     std::str::from_utf8(&digits).expect("invalid taxid string").parse::<u32>().map_err(|e| anyhow::anyhow!(e))
-    // } else if let Some((_header, meta)) = id.split_once("kraken:taxid|") {
-    //     let digits = meta.bytes().take_while(|b| b.is_ascii_digit()).collect::<Vec<u8>>();
-    //     std::str::from_utf8(&digits).expect("invalid taxid string").parse::<u32>().map_err(|e| anyhow::anyhow!(e))
-    // } else {
-    //     anyhow::bail!("No taxid pattern in id {}", id)
-    // }
 }
 
 pub fn record_get_taxid(header: &HeaderView, rec: &Record) -> Result<u32, Error> {
@@ -123,8 +112,9 @@ const READ_SRC_TAG: &str = "RG";
 pub fn get_read_src(record: &Record) -> &str {
     match record.aux(READ_SRC_TAG.as_bytes()) {
         Ok(Aux::String(str)) => str,
-        Ok(_) => "0",
-        _ => panic!("Read source tag {READ_SRC_TAG} overwritten!"),
+        _ => "0",
+        // Ok(_) => "0",
+        // _ => panic!("Read source tag {READ_SRC_TAG} overwritten!"),
     }
 }
 
@@ -133,7 +123,7 @@ pub fn get_read_src(record: &Record) -> &str {
 /// taxid if one was conclusively determined.
 pub fn cluster_read_buckets(
     read_buckets: Vec<ReadBucket>,
-    k2tax: &K2Taxonomy,
+    k2tax: Option<&K2Taxonomy>,
     headerview: &HeaderView,
     min_frac_aligned: f32,
     min_frac_matched: f32,
@@ -157,18 +147,20 @@ pub fn cluster_read_buckets(
             .iter()
             .flatten()
             .map(|(cov, read, r2)| {
-                // eprintln!("{} {}", cov.frac_aligned(), cov.frac_matched());
                 if cov.frac_aligned() >= min_frac_aligned && cov.frac_matched() >= min_frac_matched {
                     // get the taxid the mapper called
                     let map = record_get_taxid(headerview, read).expect("getting read taxonid");
 
                     // scale the mapper's call the number of kmers from that read that match its
                     // taxid.
-                    let kmer_n = k2tax.get_kmer_calls(read.qname()).map(|row| row.get_taxid_kmer_count(map, *r2));
-                    // eprintln!("PASSING");
-                    (map, cov.frac_matched() * kmer_n.unwrap_or(0) as f32)
+                    let kmer_n = if let Some(k2tax) = k2tax {
+                        k2tax.get_kmer_calls(read.qname()).map(|row| row.get_taxid_kmer_count(map, *r2)).unwrap_or(0)
+                    } else {
+                        1 // if no k2 provided, then we just take read alignments at face value
+                    };
+
+                    (map, cov.frac_matched() * kmer_n as f32)
                 } else {
-                    // eprintln!("FAILED");
                     (0_u32, f32::MIN) // below alignment thresholds
                 }
             })
@@ -188,12 +180,23 @@ pub fn cluster_read_buckets(
     Ok(winning_bucket.map(|bucket| (bucket, winning_hit)))
 }
 
-pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
-    if std::collections::HashSet::from([args.bams.len(), args.k2_reports.len(), args.k2_classifications.len()]).len()
-        != 1
-    {
-        bail!("Mismatch between Number of BAMs, kraken2 reports, and kraken2 classifcations");
-    }
+pub fn cluster_main(mut args: ClusterArgs) -> Result<(), Error> {
+    let n = args.bams.len();
+    let main_iter: Vec<(String, Option<(String, String)>)> = match (args.k2_reports, args.k2_classifications) {
+        (None, None) => std::iter::zip(args.bams, std::iter::repeat_n(None, n)).collect(),
+
+        (None, Some(_)) | (Some(_), None) => bail!("Must provide both k2 reports and k2 classifications"),
+
+        (Some(reports), Some(classifications)) => {
+            if reports.len() != classifications.len() {
+                bail!("# of k2 reports is not equal to # of k2 classifications!");
+            }
+            if reports.len() != n {
+                bail!("# of k2 files is not equal to # BAMs!");
+            }
+            std::iter::zip(args.bams, classifications.into_iter().zip(reports).map(|f| Some(f))).collect()
+        }
+    };
 
     let taxonomy = Taxonomy::from_dir(&args.taxonomy_dir).context("create taxonomy")?;
 
@@ -202,16 +205,18 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         if to_stdout { Box::new(io::stdout()) } else { Box::new(File::create(&args.output).context("create output")?) };
     let mut writer = csv::WriterBuilder::new().delimiter(args.delimiter).from_writer(output);
 
-    for ((bam, k2_report), k2_classification) in
-        std::iter::zip(&args.bams, &args.k2_reports).zip(&args.k2_classifications)
-    {
+    for (bam, k2) in main_iter {
         let mut merge = SamMergeBuffer::default();
-        let basename = bam.rsplit_once(".").unwrap_or((bam, "")).0;
+        let basename = bam.rsplit_once(".").unwrap_or((&bam, "")).0;
         let mut lt = LocusTracker::new();
-        let k2taxon =
-            K2Taxonomy::build(BufReader::new(File::open(k2_classification)?), BufReader::new(File::open(k2_report)?))?;
 
-        let mut reader = BamReader::from_path(bam).expect("create reader");
+        let k2taxon = if let Some((c, r)) = k2 {
+            Some(K2Taxonomy::build(BufReader::new(File::open(c)?), BufReader::new(File::open(r)?))?)
+        } else {
+            None
+        };
+
+        let mut reader = BamReader::from_path(&bam).expect("create reader");
         reader.set_threads(4).context("set reader threads")?;
         let header = reader.header();
         let mut seq_len = 0;
@@ -234,7 +239,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         let mut handle_buckets = |buckets: Vec<ReadBucket>| -> Result<(), Error> {
             if let Some((bucket, call_taxid)) = cluster_read_buckets(
                 buckets,
-                &k2taxon,
+                k2taxon.as_ref(),
                 &header,
                 args.min_frac_read_aligned,
                 args.min_frac_read_matched,
@@ -243,7 +248,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
 
                 if let Some(species) = taxonomy.species(call_taxid) {
                     for rec in reads.iter().flatten() {
-                        lt.add(&species.name, rec.tid(), Range { start: rec.pos(), end: rec.reference_end() - 1 });
+                        lt.add(species.tax_id, rec.tid(), Range { start: rec.pos(), end: rec.reference_end() - 1 });
 
                         seq_len += rec.seq_len();
                         n_passed += 1;
@@ -278,7 +283,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
 
             i += 1;
             if i % 1000 == 0 {
-                eprintln!("processed {i} records from {bam}");
+                eprintln!("processed {i} records from {}", &bam);
             }
         }
 
@@ -291,15 +296,19 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         failed_read_writer.flush().expect("writer flush");
 
         eprintln!("processed {i} records from {bam}");
+        let mut krona_writer = BufWriter::new(File::create(basename.to_string() + ".krona")?);
 
         if n_passed > 0 {
             let report = lt.resolve(args.min_loci_per_call, seq_len / n_passed);
 
-            if let Err(error) = report.serialize(&mut writer, &header, basename) {
-                if to_stdout && !is_broken_pipe(&error) {
-                    return Err(error);
-                }
+            if let Err(error) = report.serialize(&mut writer, &header, basename, Some(&taxonomy))
+                && to_stdout
+                && !is_broken_pipe(&error)
+            {
+                return Err(error);
             }
+
+            report.serialize_krona(&mut krona_writer)?;
         }
     }
 

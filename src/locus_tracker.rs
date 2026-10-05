@@ -1,9 +1,9 @@
 use crate::cmd_cluster::Range;
+use crate::taxonomy::Taxonomy;
 use anyhow::Error;
 use rust_htslib::bam::HeaderView;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 
 #[derive(Clone)]
@@ -13,12 +13,8 @@ pub struct Alignment {
     pub span: Range,
 }
 
-pub struct LocusTracker {
-    pub map: HashMap<String, Vec<Alignment>>,
-}
-
 pub struct AlignmentReport {
-    pub alns: HashMap<String, (Vec<Alignment>, HashSet<u64>)>,
+    pub alns: HashMap<u32, (Vec<Alignment>, HashSet<u64>)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -36,6 +32,7 @@ impl AlignmentReport {
         writer: &mut csv::Writer<W>,
         header: &HeaderView,
         source: &str,
+        taxonomy: Option<&Taxonomy>,
     ) -> Result<(), Error> {
         let mut targets: Vec<_> = self.alns.iter().collect();
         targets.sort_by_key(|(target, _)| *target);
@@ -46,9 +43,11 @@ impl AlignmentReport {
 
             references.sort();
 
+            let target = taxonomy.and_then(|t| t.get(*target)).map(|t| t.name.clone()).unwrap_or(target.to_string());
+
             writer.serialize(AlignmentReportRow {
                 source: source.to_string(),
-                target: target.to_string(),
+                target,
                 depth: alignments.iter().map(|alignment| alignment.depth).sum(),
                 loci: alignments.len(),
                 references: references.join(";"),
@@ -58,6 +57,20 @@ impl AlignmentReport {
         writer.flush()?;
         Ok(())
     }
+
+    // write TSV in format (taxid, # reads mapped)
+    pub fn serialize_krona<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
+        for (tid, (alns, _)) in self.alns.iter() {
+            writeln!(writer, "{}\t{}", tid, alns.iter().map(|a| a.depth).sum::<usize>())?
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+}
+
+pub struct LocusTracker {
+    pub map: HashMap<u32, Vec<Alignment>>,
 }
 
 impl LocusTracker {
@@ -65,17 +78,9 @@ impl LocusTracker {
         Self { map: HashMap::new() }
     }
 
-    pub fn add(&mut self, target: impl ToString, tid: i32, range: Range) {
-        self.map.entry(target.to_string()).or_default().push(Alignment { tid: tid as u64, span: range, depth: 1 });
+    pub fn add(&mut self, target: u32, tid: i32, range: Range) {
+        self.map.entry(target).or_default().push(Alignment { tid: tid as u64, span: range, depth: 1 });
     }
-
-    // pub fn add_and_hash(&mut self, target: impl ToString, tid: impl Hash, range: Range) {
-    //     let mut hasher = DefaultHasher::new();
-    //     tid.hash(&mut hasher);
-    //     let tid_hash = hasher.finish();
-
-    //     self.map.entry(target.to_string()).or_default().push(Alignment { tid: tid_hash, span: range, depth: 1 });
-    // }
 
     pub fn resolve(&mut self, min_calls_per_loci: usize, read_len: usize) -> AlignmentReport {
         assert!(read_len > 0);
@@ -108,8 +113,6 @@ impl LocusTracker {
             if total >= min_calls_per_loci {
                 report.alns.insert(k.clone(), (dest, set));
             }
-
-            // *v = dest;
         }
 
         report
@@ -121,8 +124,8 @@ mod test {
     use super::*;
     use rust_htslib::bam::{Header, header::HeaderRecord};
 
-    fn assert_spans(report: &AlignmentReport, target: &str, expected: &[Range]) {
-        let actual: Vec<_> = report.alns[target].0.iter().map(|alignment| alignment.span).collect();
+    fn assert_spans(report: &AlignmentReport, target: u32, expected: &[Range]) {
+        let actual: Vec<_> = report.alns[&target].0.iter().map(|alignment| alignment.span).collect();
 
         assert_eq!(actual, expected);
     }
@@ -142,8 +145,8 @@ mod test {
         lt.add(2, 1, r4);
 
         let report = lt.resolve(0, 1);
-        assert_spans(&report, "1", &[Range { start: 0, end: 350 }, r3]);
-        assert_spans(&report, "2", &[Range { start: 0, end: 1 }]);
+        assert_spans(&report, 1, &[Range { start: 0, end: 350 }, r3]);
+        assert_spans(&report, 2, &[Range { start: 0, end: 1 }]);
     }
 
     #[test]
@@ -157,7 +160,7 @@ mod test {
 
         assert_spans(
             &report,
-            "1",
+            1,
             &[Range { start: 0, end: 10 }, Range { start: 20, end: 30 }, Range { start: 40, end: 50 }],
         );
     }
@@ -170,7 +173,7 @@ mod test {
 
         let report = lt.resolve(0, 1);
 
-        assert_spans(&report, "1", &[Range { start: 0, end: 20 }]);
+        assert_spans(&report, 1, &[Range { start: 0, end: 20 }]);
     }
 
     #[test]
@@ -182,7 +185,7 @@ mod test {
 
         let report = lt.resolve(0, 1);
 
-        assert_spans(&report, "1", &[Range { start: 0, end: 20 }]);
+        assert_spans(&report, 1, &[Range { start: 0, end: 20 }]);
     }
 
     #[test]
@@ -194,7 +197,7 @@ mod test {
 
         let report = lt.resolve(0, 1);
 
-        assert_spans(&report, "1", &[Range { start: 0, end: 15 }]);
+        assert_spans(&report, 1, &[Range { start: 0, end: 15 }]);
     }
 
     #[test]
@@ -207,41 +210,41 @@ mod test {
 
         let report = lt.resolve(0, 1);
 
-        assert_spans(&report, "1", &[Range { start: 0, end: 15 }]);
-        assert_spans(&report, "2", &[Range { start: 100, end: 130 }]);
+        assert_spans(&report, 1, &[Range { start: 0, end: 15 }]);
+        assert_spans(&report, 2, &[Range { start: 100, end: 130 }]);
     }
 
     #[test]
     fn serializes_report_as_csv() {
         let mut lt = LocusTracker::new();
-        lt.add("species", 0, Range { start: 0, end: 10 });
-        lt.add("species", 1, Range { start: 20, end: 30 });
+        lt.add(0, 0, Range { start: 0, end: 10 });
+        lt.add(0, 1, Range { start: 20, end: 30 });
         let report = lt.resolve(0, 1);
         let header = test_header();
         let mut writer = csv::Writer::from_writer(Vec::new());
 
-        report.serialize(&mut writer, &header, "sample.bam").unwrap();
-        report.serialize(&mut writer, &header, "sample-2.bam").unwrap();
+        report.serialize(&mut writer, &header, "sample.bam", None).unwrap();
+        report.serialize(&mut writer, &header, "sample-2.bam", None).unwrap();
 
         let output = String::from_utf8(writer.into_inner().unwrap()).unwrap();
         assert_eq!(
             output,
-            "source,target,depth,loci,references\nsample.bam,species,2,2,ref-a;ref-b\nsample-2.bam,species,2,2,ref-a;ref-b\n"
+            "source,target,depth,loci,references\nsample.bam,0,2,2,ref-a;ref-b\nsample-2.bam,0,2,2,ref-a;ref-b\n"
         );
     }
 
     #[test]
     fn serializes_report_as_tsv() {
         let mut lt = LocusTracker::new();
-        lt.add("species", 0, Range { start: 0, end: 10 });
+        lt.add(42, 0, Range { start: 0, end: 10 });
         let report = lt.resolve(0, 1);
         let header = test_header();
         let mut writer = csv::WriterBuilder::new().delimiter(b'\t').from_writer(Vec::new());
 
-        report.serialize(&mut writer, &header, "sample.bam").unwrap();
+        report.serialize(&mut writer, &header, "sample.bam", None).unwrap();
 
         let output = String::from_utf8(writer.into_inner().unwrap()).unwrap();
-        assert_eq!(output, "source\ttarget\tdepth\tloci\treferences\nsample.bam\tspecies\t1\t1\tref-a\n");
+        assert_eq!(output, "source\ttarget\tdepth\tloci\treferences\nsample.bam\t42\t1\t1\tref-a\n");
     }
 
     fn test_header() -> HeaderView {
