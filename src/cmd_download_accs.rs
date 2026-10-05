@@ -64,10 +64,7 @@ impl NCBIRequestTracker {
 impl std::default::Default for NCBIRequestTracker {
     #[inline(always)]
     fn default() -> Self {
-        Self {
-            nrequests: 0,
-            time_last_clear: Instant::now(),
-        }
+        Self { nrequests: 0, time_last_clear: Instant::now() }
     }
 }
 
@@ -93,10 +90,8 @@ pub fn download_accs_for_taxid(taxid: u32, tracker: &mut NCBIRequestTracker, api
 }
 
 pub fn download_accs_main(args: DownloadAccessionsArgs) -> Result<(), Error> {
-    let (totallines, input): (usize, Box<dyn Read>) = (
-        BufReader::new(open_file_reader(&args.input)?).lines().count(),
-        open_file_reader(&args.input)?,
-    );
+    let (totallines, input): (usize, Box<dyn Read>) =
+        (BufReader::new(open_file_reader(&args.input)?).lines().count(), open_file_reader(&args.input)?);
 
     let reader = BufReader::new(input);
 
@@ -108,12 +103,11 @@ pub fn download_accs_main(args: DownloadAccessionsArgs) -> Result<(), Error> {
         }
     };
 
-    let mut taxo = Taxonomy::from_dir(args.taxonomy_dir)?;
+    let taxo = Taxonomy::from_dir(args.taxonomy_dir)?;
 
     let blacklist: HashSet<u32> = if let Some(blacklist) = args.species_blacklist {
-        let iter = BufReader::new(std::fs::File::open(blacklist)?)
-            .lines()
-            .map(|l| l.unwrap().trim().parse::<u32>().unwrap());
+        let iter =
+            BufReader::new(std::fs::File::open(blacklist)?).lines().map(|l| l.unwrap().trim().parse::<u32>().unwrap());
         HashSet::from_iter(iter)
     } else {
         HashSet::new()
@@ -122,10 +116,7 @@ pub fn download_accs_main(args: DownloadAccessionsArgs) -> Result<(), Error> {
     // track reference-level taxon ids to make sure we aren't doing repeated work
     let mut seen: HashSet<u32> = HashSet::new();
 
-    let mut tracker = NCBIRequestTracker {
-        nrequests: 0,
-        time_last_clear: Instant::now(),
-    };
+    let mut tracker = NCBIRequestTracker { nrequests: 0, time_last_clear: Instant::now() };
 
     for (i, line) in reader.lines().enumerate() {
         let tid = line?.trim().parse::<u32>()?;

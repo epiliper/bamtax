@@ -33,11 +33,7 @@ pub struct ExtractArgs {
 
 fn make_bam_name(dir: Option<&Path>, prefix: &str) -> String {
     let name = format!("{prefix}_bamtax.bam");
-    let name = if let Some(dir) = dir {
-        dir.join(Path::new(&name)).to_str().unwrap().to_string()
-    } else {
-        name
-    };
+    let name = if let Some(dir) = dir { dir.join(Path::new(&name)).to_str().unwrap().to_string() } else { name };
 
     name.replace(" ", "_")
 }
@@ -50,10 +46,7 @@ pub fn extract_main(args: ExtractArgs) -> Result<(), Error> {
     let data_dir: PathBuf;
 
     let lines: Result<Vec<String>, std::io::Error> = if let Some(report) = &args.report {
-        data_dir = PathBuf::from(report)
-            .parent()
-            .expect("failed to get parent dir of report file")
-            .to_path_buf();
+        data_dir = PathBuf::from(report).parent().expect("failed to get parent dir of report file").to_path_buf();
 
         let input = File::open(report)?;
         BufReader::new(input).lines().skip(1).collect()
@@ -76,10 +69,7 @@ pub fn extract_main(args: ExtractArgs) -> Result<(), Error> {
             continue;
         };
 
-        let mut rdr = csv::ReaderBuilder::new()
-            .has_headers(false)
-            .delimiter(b'\t')
-            .from_reader(r.trim().as_bytes());
+        let mut rdr = csv::ReaderBuilder::new().has_headers(false).delimiter(b'\t').from_reader(r.trim().as_bytes());
 
         let alignrow: AlignmentReportRow = rdr.deserialize().next().unwrap()?;
 

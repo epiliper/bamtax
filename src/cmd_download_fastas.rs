@@ -111,33 +111,19 @@ struct ThreadPool {
 
 impl ThreadPool {
     pub fn new(n_threads: usize) -> Self {
-        let notify = Arc::new(ThreadSignal {
-            n: Mutex::new(n_threads),
-            c: Condvar::new(),
-            jobs_done: AtomicUsize::new(0),
-        });
+        let notify =
+            Arc::new(ThreadSignal { n: Mutex::new(n_threads), c: Condvar::new(), jobs_done: AtomicUsize::new(0) });
 
-        let mut s = Self {
-            notify,
-            workers: Vec::with_capacity(n_threads),
-        };
+        let mut s = Self { notify, workers: Vec::with_capacity(n_threads) };
 
-        (0..n_threads).for_each(|_| {
-            s.workers.push(Worker {
-                handle: None,
-                notify: Arc::clone(&s.notify),
-            })
-        });
+        (0..n_threads).for_each(|_| s.workers.push(Worker { handle: None, notify: Arc::clone(&s.notify) }));
 
         s
     }
 
     pub fn get_available(&mut self) -> Option<&mut Worker> {
         self.notify.wait_while();
-        eprint!(
-            "Finished {} jobs so far...\r",
-            self.notify.jobs_done.load(Ordering::Relaxed)
-        );
+        eprint!("Finished {} jobs so far...\r", self.notify.jobs_done.load(Ordering::Relaxed));
         self.workers.iter_mut().find_map(|w| w.is_finished().then_some(w))
     }
 
@@ -177,11 +163,7 @@ pub struct DownloadFastasArgs {
 }
 
 fn download_fasta_thread(batch: Vec<(u32, String)>, api_key: String, sender: Sender<ThreadOutput>) {
-    let accessions = batch
-        .iter()
-        .map(|(_, accession)| accession.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
+    let accessions = batch.iter().map(|(_, accession)| accession.as_str()).collect::<Vec<_>>().join(",");
     let fetch = Command::new("efetch")
         .args(["-db", "nucleotide", "-id", &accessions, "-format", "fasta"])
         .env("NCBI_API_KEY", api_key)
@@ -189,20 +171,14 @@ fn download_fasta_thread(batch: Vec<(u32, String)>, api_key: String, sender: Sen
         .unwrap();
 
     if !fetch.status.success() | fetch.stdout.is_empty() {
-        eprintln!(
-            "Downloading batch failed: {}",
-            std::str::from_utf8(&fetch.stderr).unwrap()
-        );
+        eprintln!("Downloading batch failed: {}", std::str::from_utf8(&fetch.stderr).unwrap());
     }
 
     let mut reader = FastaReader::new(fetch.stdout.as_slice());
     while let Some(record) = reader.next() {
         let record = record.unwrap();
         let accession = record.id().unwrap();
-        if let Some(taxid) = batch
-            .iter()
-            .find_map(|(taxid, requested)| (requested == accession).then_some(*taxid))
-        {
+        if let Some(taxid) = batch.iter().find_map(|(taxid, requested)| (requested == accession).then_some(*taxid)) {
             let mut fastabytes = Vec::new();
             record.write(&mut fastabytes).unwrap();
             sender.send(ThreadOutput { fastabytes, taxid }).unwrap();
@@ -215,11 +191,7 @@ pub fn download_fastas_main(args: DownloadFastasArgs) -> Result<(), Error> {
 
     let output = DatabaseWriter::new(args.output_prefix.clone(), args.gzip_output, None)?;
 
-    let filtargs = DBFilterArgs {
-        min_len: args.min_len,
-        max_len: args.max_len,
-        max_frac_ambig: args.max_frac_ambig,
-    };
+    let filtargs = DBFilterArgs { min_len: args.min_len, max_len: args.max_len, max_frac_ambig: args.max_frac_ambig };
 
     // spawn a thread to handle writes/validation
     let (output, sender) = OutputThread::new(output, filtargs);

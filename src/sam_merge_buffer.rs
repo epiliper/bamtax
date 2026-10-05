@@ -1,6 +1,6 @@
 use rust_htslib::bam::record::Record;
-use std::collections::{HashSet, VecDeque};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ReadHash {

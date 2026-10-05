@@ -91,15 +91,7 @@ impl<'a> K2Taxonomy {
 
     pub fn rank_nodes(&'a self, rank: &str) -> impl Iterator<Item = &'a K2Taxon> {
         let mut nodes = self.tree.values();
-        std::iter::from_fn(move || {
-            while let Some(node) = nodes.next() {
-                if node.row.rank == rank {
-                    return Some(node);
-                }
-            }
-
-            None
-        })
+        std::iter::from_fn(move || nodes.by_ref().find(|&node| node.row.rank == rank))
     }
 
     pub fn get_kmer_calls(&self, read_name: &[u8]) -> Option<&K2ClassificationRow> {

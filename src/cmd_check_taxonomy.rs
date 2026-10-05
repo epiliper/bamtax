@@ -57,9 +57,7 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
         BufWriter::new(Box::new(std::io::stdout()))
     };
 
-    let mut csv_writer = csv::WriterBuilder::new()
-        .delimiter(args.delimiter)
-        .from_writer(outwriter);
+    let mut csv_writer = csv::WriterBuilder::new().delimiter(args.delimiter).from_writer(outwriter);
 
     let mut query_reader: BufReader<Box<dyn Read>> = if let Some(input) = args.query_headers.as_ref() {
         BufReader::new(Box::new(std::fs::File::open(input)?))
@@ -95,10 +93,7 @@ pub fn check_taxonomy_main(args: CheckTaxonomyArgs) -> Result<(), Error> {
     }
 
     while query_reader.read_line(&mut line)? > 0 {
-        let tid = line
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("invalid taxon id in query: {}", line))?;
+        let tid = line.trim().parse::<u32>().with_context(|| format!("invalid taxon id in query: {}", line))?;
         line.clear();
 
         let query_name = taxonomy.get(tid).map(|d| d.name.as_str()).unwrap_or("not in taxonomy");

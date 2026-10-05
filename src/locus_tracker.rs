@@ -111,7 +111,7 @@ impl LocusTracker {
             let total: usize = dest.iter().map(|d| std::cmp::max(1, d.span.len() / read_len)).sum();
 
             if total >= min_calls_per_loci {
-                report.alns.insert(k.clone(), (dest, set));
+                report.alns.insert(*k, (dest, set));
             }
         }
 

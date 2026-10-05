@@ -74,15 +74,11 @@ fn parse_chunksize(value: &str) -> Result<u64, String> {
     if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err("chunk size must be a positive integer followed by K, M, or G".to_string());
     }
-    let number = number
-        .parse::<u64>()
-        .map_err(|_| "chunk size is too large".to_string())?;
+    let number = number.parse::<u64>().map_err(|_| "chunk size is too large".to_string())?;
     if number == 0 {
         return Err("chunk size must be greater than zero".to_string());
     }
-    number
-        .checked_mul(multiplier)
-        .ok_or_else(|| "chunk size is too large".to_string())
+    number.checked_mul(multiplier).ok_or_else(|| "chunk size is too large".to_string())
 }
 
 pub struct DatabaseWriter {
@@ -104,15 +100,7 @@ impl DatabaseWriter {
         let header_file = std::fs::File::create(format!("{output_prefix}_headers.txt"))?;
         header_file.try_lock()?;
         let header_writer = Box::new(std::io::BufWriter::with_capacity(BUFWRITER_CAP, header_file));
-        Ok(Self {
-            output_prefix,
-            gzip_fasta,
-            chunksize,
-            chunk_number,
-            chunk_bytes: 0,
-            fasta_writer,
-            header_writer,
-        })
+        Ok(Self { output_prefix, gzip_fasta, chunksize, chunk_number, chunk_bytes: 0, fasta_writer, header_writer })
     }
 
     pub fn create_fasta_writer(
@@ -206,14 +194,10 @@ pub fn construct_assembly_to_tid_db<P: AsRef<Path>>(paths: &[P]) -> Result<HashM
         let mut reader = BufReader::new(f);
 
         while reader.read_line(&mut line)? > 0 {
-            let (assembly, taxid) = line
-                .trim()
-                .split_once("\t")
-                .with_context(|| format!("Invalid assembly to tid line: {line}"))?;
+            let (assembly, taxid) =
+                line.trim().split_once("\t").with_context(|| format!("Invalid assembly to tid line: {line}"))?;
 
-            let taxid = taxid
-                .parse::<u32>()
-                .with_context(|| format!("Invalid taxid in line {taxid}"))?;
+            let taxid = taxid.parse::<u32>().with_context(|| format!("Invalid taxid in line {taxid}"))?;
 
             if !ret.contains_key(assembly) {
                 ret.insert(assembly.to_string(), taxid);
@@ -237,11 +221,7 @@ pub fn process_metadata_fasta<R: std::io::Read>(
     headers_already_changed: bool,
     gzip: bool,
 ) -> Result<(), Error> {
-    let inner: Box<dyn std::io::Read> = if gzip {
-        Box::new(MultiGzDecoder::new(fasta))
-    } else {
-        Box::new(fasta)
-    };
+    let inner: Box<dyn std::io::Read> = if gzip { Box::new(MultiGzDecoder::new(fasta)) } else { Box::new(fasta) };
 
     let mut reader = FastaReader::new(BufReader::new(inner));
 
@@ -301,11 +281,7 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
 
     let mut writer = DatabaseWriter::new(args.output_prefix, args.gzip_fasta, args.chunksize)?;
 
-    let filtargs = DBFilterArgs {
-        min_len: args.min_len,
-        max_len: args.max_len,
-        max_frac_ambig: args.max_frac_ambig,
-    };
+    let filtargs = DBFilterArgs { min_len: args.min_len, max_len: args.max_len, max_frac_ambig: args.max_frac_ambig };
 
     for file in &args.reheadered_fastas {
         if Path::new(file).is_file() {
@@ -319,9 +295,7 @@ pub fn build_db_main(args: BuildDbArgs) -> Result<(), Error> {
                 file.ends_with(".gz"),
             )?;
         } else {
-            let entries = Path::new(file)
-                .read_dir()
-                .with_context(|| format!("error reading dir {}", file))?;
+            let entries = Path::new(file).read_dir().with_context(|| format!("error reading dir {}", file))?;
 
             for f in entries {
                 let f = f?;
@@ -408,14 +382,8 @@ mod tests {
 
         assert_eq!(fs::read_to_string(root.join("db.1.fasta")).unwrap(), ">one\nAAAA\n");
         assert_eq!(fs::read_to_string(root.join("db.2.fasta")).unwrap(), ">two\nCCCC\n");
-        assert_eq!(
-            fs::read_to_string(root.join("db.3.fasta")).unwrap(),
-            ">oversized\nGGGGGGGGGG\n"
-        );
-        assert_eq!(
-            fs::read_to_string(root.join("db_headers.txt")).unwrap(),
-            "one\ntwo\noversized\n"
-        );
+        assert_eq!(fs::read_to_string(root.join("db.3.fasta")).unwrap(), ">oversized\nGGGGGGGGGG\n");
+        assert_eq!(fs::read_to_string(root.join("db_headers.txt")).unwrap(), "one\ntwo\noversized\n");
         assert!(!root.join("db.1_headers.txt").exists());
 
         fs::remove_dir_all(root).unwrap();

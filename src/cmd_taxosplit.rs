@@ -53,11 +53,7 @@ fn taxosplit_fasta(
     let inner: Box<dyn std::io::Read> = {
         let f = std::fs::File::open(file)?;
 
-        if file.ends_with(".gz") {
-            Box::new(MultiGzDecoder::new(f))
-        } else {
-            Box::new(f)
-        }
+        if file.ends_with(".gz") { Box::new(MultiGzDecoder::new(f)) } else { Box::new(f) }
     };
 
     let mut reader = FastaReader::new(BufReader::new(inner));
@@ -121,30 +117,15 @@ pub fn taxosplit_main(args: TaxoSplitArgs) -> Result<(), Error> {
     let mut seen_records: HashSet<String> = HashSet::new();
     let mut splitmap: HashMap<u32, DatabaseWriter> = HashMap::new();
 
-    let filtargs = DBFilterArgs {
-        min_len: args.min_len,
-        max_len: args.max_len,
-        max_frac_ambig: args.max_frac_ambig,
-    };
+    let filtargs = DBFilterArgs { min_len: args.min_len, max_len: args.max_len, max_frac_ambig: args.max_frac_ambig };
 
     let assembly_tid_map = construct_assembly_to_tid_db(&args.assembly_to_taxid_map)?;
 
     for file in &args.reheadered_fastas {
         if Path::new(file).is_file() {
-            taxosplit_fasta(
-                0,
-                file,
-                &mut seen_records,
-                &filtargs,
-                true,
-                &mut splitmap,
-                &mut taxonomy,
-                args.rank,
-            )?;
+            taxosplit_fasta(0, file, &mut seen_records, &filtargs, true, &mut splitmap, &mut taxonomy, args.rank)?;
         } else {
-            let entries = Path::new(file)
-                .read_dir()
-                .with_context(|| format!("error reading dir {}", file))?;
+            let entries = Path::new(file).read_dir().with_context(|| format!("error reading dir {}", file))?;
 
             for f in entries {
                 let f = f?;

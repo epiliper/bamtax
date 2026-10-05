@@ -23,21 +23,14 @@ pub struct ReportSpeciesArgs {
 pub fn open_file_reader(p: &str) -> Result<Box<dyn Read>, Error> {
     let inner = std::fs::File::open(p)?;
 
-    let inner: Box<dyn Read> = if p.ends_with(".gz") {
-        Box::new(MultiGzDecoder::new(inner))
-    } else {
-        Box::new(inner)
-    };
+    let inner: Box<dyn Read> = if p.ends_with(".gz") { Box::new(MultiGzDecoder::new(inner)) } else { Box::new(inner) };
 
     Ok(inner)
 }
 
 pub fn report_species_main(args: ReportSpeciesArgs) -> Result<(), Error> {
-    let input: Box<dyn Read> = if &args.input == "-" {
-        Box::new(std::io::stdin().lock())
-    } else {
-        open_file_reader(&args.input)?
-    };
+    let input: Box<dyn Read> =
+        if &args.input == "-" { Box::new(std::io::stdin().lock()) } else { open_file_reader(&args.input)? };
 
     let output: Box<dyn Write> = if &args.output == "-" {
         Box::new(std::io::stdout().lock())
@@ -49,7 +42,7 @@ pub fn report_species_main(args: ReportSpeciesArgs) -> Result<(), Error> {
 
     let reader = BufReader::new(input);
 
-    let mut taxo = Taxonomy::from_dir(&args.taxonomy_dir).context("create taxonomy")?;
+    let taxo = Taxonomy::from_dir(&args.taxonomy_dir).context("create taxonomy")?;
     let mut seen: HashSet<u32> = HashSet::new();
 
     for f in reader.lines() {

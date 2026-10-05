@@ -60,6 +60,7 @@ impl<'a> Taxonomy {
         self.nodes.get(&tax_id)
     }
 
+    #[allow(dead_code)]
     /// Returns the lineage from the root through the requested taxon.
     pub fn lineage(&'a self, tax_id: u32) -> Option<Vec<&'a Taxon>> {
         let mut lineage = Vec::new();
@@ -87,6 +88,7 @@ impl<'a> Taxonomy {
         self.lookup(tax_id, Rank::Species)
     }
 
+    #[allow(dead_code)]
     pub fn genus(&self, tax_id: u32) -> Option<&Taxon> {
         self.lookup(tax_id, Rank::Genus)
     }
@@ -237,7 +239,7 @@ mod tests {
 
     #[test]
     fn resolves_species_for_descendant_tax_id() {
-        let mut taxonomy = taxonomy();
+        let taxonomy = taxonomy();
 
         assert_eq!(taxonomy.species(11).unwrap().tax_id, 10);
         assert_eq!(taxonomy.species(10).unwrap().name, "Example species");

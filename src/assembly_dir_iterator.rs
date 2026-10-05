@@ -13,11 +13,7 @@ pub struct AssemblyDirIterator {
 impl AssemblyDirIterator {
     pub fn new<P: AsRef<Path>>(input: P) -> Result<Self, Error> {
         let input = input.as_ref();
-        let assembly_name = if is_assembly_dir(input)? {
-            file_name(input)?.map(str::to_owned)
-        } else {
-            None
-        };
+        let assembly_name = if is_assembly_dir(input)? { file_name(input)?.map(str::to_owned) } else { None };
         let mut q = VecDeque::new();
         q.push_back((
             std::fs::read_dir(input).with_context(|| format!("couldn't read input directory {:?}", input))?,
@@ -41,11 +37,8 @@ impl AssemblyDirIterator {
             let path = entry.path();
             let file_type = entry.file_type()?;
             if file_type.is_dir() {
-                let child_assembly_name = if is_assembly_dir(&path)? {
-                    file_name(&path)?.map(str::to_owned)
-                } else {
-                    assembly_name
-                };
+                let child_assembly_name =
+                    if is_assembly_dir(&path)? { file_name(&path)?.map(str::to_owned) } else { assembly_name };
                 self.q.push_front((std::fs::read_dir(&path)?, child_assembly_name));
                 continue;
             }
@@ -65,11 +58,7 @@ fn is_assembly_dir(path: &Path) -> Result<bool, Error> {
 
 pub fn file_name(p: &Path) -> Result<Option<&str>, Error> {
     p.file_name()
-        .map(|fname| {
-            fname
-                .to_str()
-                .with_context(|| format!("couldn't get file name for {:?}", fname))
-        })
+        .map(|fname| fname.to_str().with_context(|| format!("couldn't get file name for {:?}", fname)))
         .transpose()
 }
 
@@ -82,9 +71,7 @@ impl Iterator for AssemblyDirIterator {
 }
 
 fn path_to_string(path: PathBuf) -> Result<String, Error> {
-    path.into_os_string()
-        .into_string()
-        .map_err(|path| anyhow::anyhow!("couldn't convert path {:?} to UTF-8", path))
+    path.into_os_string().into_string().map_err(|path| anyhow::anyhow!("couldn't convert path {:?} to UTF-8", path))
 }
 
 #[cfg(test)]
@@ -108,23 +95,14 @@ mod tests {
         fs::write(assembly.join("notes.txt"), []).unwrap();
         fs::write(unrelated.join("ignored.fna"), []).unwrap();
 
-        let mut found = AssemblyDirIterator::new(&root)
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+        let mut found = AssemblyDirIterator::new(&root).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
         found.sort();
 
         assert_eq!(
             found,
             vec![
-                (
-                    "GCF_000001.1_example".to_owned(),
-                    assembly.join("genomic.fna.gz").to_str().unwrap().to_owned(),
-                ),
-                (
-                    "GCF_000001.1_example".to_owned(),
-                    nested.join("extra.fna").to_str().unwrap().to_owned(),
-                ),
+                ("GCF_000001.1_example".to_owned(), assembly.join("genomic.fna.gz").to_str().unwrap().to_owned(),),
+                ("GCF_000001.1_example".to_owned(), nested.join("extra.fna").to_str().unwrap().to_owned(),),
             ]
         );
 
