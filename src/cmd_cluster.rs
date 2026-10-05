@@ -27,33 +27,52 @@ impl Range {
     }
 }
 
+const CLUSTER_HELP: &str = "
+Generate species calls for one or more BAMs, optionally using output from kraken-style
+classifiers to confirm read mapping specificity.
+
+IMPORTANT: if specifying k2 files, the order of the k2 files must match the order of the input 
+BAM files; these are not sorted internally.                                                    
+
+Good:   --bams 1.bam 2.bam  --k2-reports 1.txt 2.txt --k2-classifications 1.txt 2.txt          
+Bad:    --bams 1.bam 2.bam  --k2-reports 2.txt 1.txt --k2-classifications 1.txt 2.txt";
+
 #[derive(Parser)]
-#[command(version, arg_required_else_help = true)]
+#[command(version, arg_required_else_help = true, about = CLUSTER_HELP, long_about = CLUSTER_HELP, arg_required_else_help = true)]
 pub struct ClusterArgs {
+    /// output name of report
     #[arg(short = 'o', default_value = "-")]
     pub output: String,
 
+    /// Delimiter to use in report
     #[arg(short = 'd', long, default_value = "\\t", value_parser = parse_delimiter)]
     pub delimiter: u8,
 
+    /// Minimum fraction of considered reads that should be aligned, not matched
     #[arg(short = 'f', default_value_t = 0.4)]
     pub min_frac_read_aligned: f32,
 
+    /// Minimum fraction of considered reads that should be matched to ref
     #[arg(short = 'a', default_value_t = 0.4)]
     pub min_frac_read_matched: f32,
 
+    /// Directory with NCBI .dmp taxonomy files
     #[arg(short = 't', long)]
     pub taxonomy_dir: String,
 
+    /// Input BAM files
     #[arg(short, long, required = true, num_args = 1..)]
     pub bams: Vec<String>,
 
+    /// Input K2 report files. Using this option, k2-classifications are required
     #[arg(short, long, required = false, num_args = 1..)]
     pub k2_reports: Option<Vec<String>>,
 
+    /// Input k2 per-read classifications. Should be with k2-reports
     #[arg(short, long, required = false, num_args = 1..)]
     pub k2_classifications: Option<Vec<String>>,
 
+    /// Minimum # of loci per species to make a call
     #[arg(short = 'm', default_value_t = 3)]
     pub min_loci_per_call: usize,
 }
@@ -85,6 +104,7 @@ pub fn taxid_from_id_str(id: &str) -> Result<u32, Error> {
     std::str::from_utf8(digits.as_slice()).expect("invalid taxid string").parse::<u32>().map_err(|e| anyhow::anyhow!(e))
 }
 
+#[inline(always)]
 pub fn record_get_taxid(header: &HeaderView, rec: &Record) -> Result<u32, Error> {
     let tname = std::str::from_utf8(tid2name(header, rec.tid())?)?;
 
@@ -103,12 +123,14 @@ pub fn is_broken_pipe(error: &Error) -> bool {
     })
 }
 
+#[inline(always)]
 pub fn tid2name(header: &HeaderView, tid: i32) -> Result<&[u8], Error> {
     Ok(header.tid2name(u32::try_from(tid)?))
 }
 
 const READ_SRC_TAG: &str = "RG";
 
+#[inline(always)]
 pub fn get_read_src(record: &Record) -> &str {
     match record.aux(READ_SRC_TAG.as_bytes()) {
         Ok(Aux::String(str)) => str,
@@ -143,6 +165,7 @@ pub fn cluster_read_buckets(
         let checks =
             [Some((r1_cov, &bucket.rec, false)), r2_cov.map(|r2_cov| (r2_cov, bucket.mate.as_ref().unwrap(), true))];
 
+        // tie-break between mates if they are chimeric
         let (pair_hit, pair_score) = checks
             .iter()
             .flatten()
@@ -180,7 +203,7 @@ pub fn cluster_read_buckets(
     Ok(winning_bucket.map(|bucket| (bucket, winning_hit)))
 }
 
-pub fn cluster_main(mut args: ClusterArgs) -> Result<(), Error> {
+pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
     let n = args.bams.len();
     let main_iter: Vec<(String, Option<(String, String)>)> = match (args.k2_reports, args.k2_classifications) {
         (None, None) => std::iter::zip(args.bams, std::iter::repeat_n(None, n)).collect(),
@@ -194,7 +217,7 @@ pub fn cluster_main(mut args: ClusterArgs) -> Result<(), Error> {
             if reports.len() != n {
                 bail!("# of k2 files is not equal to # BAMs!");
             }
-            std::iter::zip(args.bams, classifications.into_iter().zip(reports).map(|f| Some(f))).collect()
+            std::iter::zip(args.bams, classifications.into_iter().zip(reports).map(Some)).collect()
         }
     };
 
