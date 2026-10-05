@@ -69,13 +69,13 @@ impl LocusTracker {
         self.map.entry(target.to_string()).or_default().push(Alignment { tid: tid as u64, span: range, depth: 1 });
     }
 
-    pub fn add_and_hash(&mut self, target: impl ToString, tid: impl Hash, range: Range) {
-        let mut hasher = DefaultHasher::new();
-        tid.hash(&mut hasher);
-        let tid_hash = hasher.finish();
+    // pub fn add_and_hash(&mut self, target: impl ToString, tid: impl Hash, range: Range) {
+    //     let mut hasher = DefaultHasher::new();
+    //     tid.hash(&mut hasher);
+    //     let tid_hash = hasher.finish();
 
-        self.map.entry(target.to_string()).or_default().push(Alignment { tid: tid_hash, span: range, depth: 1 });
-    }
+    //     self.map.entry(target.to_string()).or_default().push(Alignment { tid: tid_hash, span: range, depth: 1 });
+    // }
 
     pub fn resolve(&mut self, min_calls_per_loci: usize, read_len: usize) -> AlignmentReport {
         assert!(read_len > 0);

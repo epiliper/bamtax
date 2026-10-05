@@ -46,13 +46,13 @@ pub struct ClusterArgs {
     #[arg(short = 't', long)]
     pub taxonomy_dir: String,
 
-    #[arg(required = true, num_args = 1..)]
+    #[arg(short, long, required = true, num_args = 1..)]
     pub bams: Vec<String>,
 
-    #[arg(required = true, num_args = 1..)]
+    #[arg(short, long, required = true, num_args = 1..)]
     pub k2_reports: Vec<String>,
 
-    #[arg(required = true, num_args = 1..)]
+    #[arg(short, long, required = true, num_args = 1..)]
     pub k2_classifications: Vec<String>,
 
     #[arg(short = 'm', default_value_t = 3)]
@@ -74,13 +74,26 @@ pub fn parse_delimiter(value: &str) -> Result<u8, String> {
 
 #[inline(always)]
 pub fn taxid_from_id_str(id: &str) -> Result<u32, Error> {
-    if let Some((_header, meta)) = id.split_once("|taxid:") {
-        let digits = meta.bytes().take_while(|b| b.is_ascii_digit()).collect::<Vec<u8>>();
-
-        std::str::from_utf8(&digits).expect("invalid taxid string").parse::<u32>().map_err(|e| anyhow::anyhow!(e))
+    let split = if let Some((_header, meta)) = id.split_once("|taxid:") {
+        meta
+    } else if let Some((_header, meta)) = id.split_once("kraken:taxid|") {
+        meta
     } else {
-        anyhow::bail!("No taxid pattern in id {}", id)
-    }
+        bail!("No taxid pattern in id {}", id);
+    };
+
+    let digits = split.bytes().take_while(|b| b.is_ascii_digit()).collect::<Vec<u8>>();
+    std::str::from_utf8(digits.as_slice()).expect("invalid taxid string").parse::<u32>().map_err(|e| anyhow::anyhow!(e))
+
+    // if let Some((_header, meta)) = id.split_once("|taxid:") {
+    //     let digits = meta.bytes().take_while(|b| b.is_ascii_digit()).collect::<Vec<u8>>();
+    //     std::str::from_utf8(&digits).expect("invalid taxid string").parse::<u32>().map_err(|e| anyhow::anyhow!(e))
+    // } else if let Some((_header, meta)) = id.split_once("kraken:taxid|") {
+    //     let digits = meta.bytes().take_while(|b| b.is_ascii_digit()).collect::<Vec<u8>>();
+    //     std::str::from_utf8(&digits).expect("invalid taxid string").parse::<u32>().map_err(|e| anyhow::anyhow!(e))
+    // } else {
+    //     anyhow::bail!("No taxid pattern in id {}", id)
+    // }
 }
 
 pub fn record_get_taxid(header: &HeaderView, rec: &Record) -> Result<u32, Error> {
@@ -144,6 +157,7 @@ pub fn cluster_read_buckets(
             .iter()
             .flatten()
             .map(|(cov, read, r2)| {
+                // eprintln!("{} {}", cov.frac_aligned(), cov.frac_matched());
                 if cov.frac_aligned() >= min_frac_aligned && cov.frac_matched() >= min_frac_matched {
                     // get the taxid the mapper called
                     let map = record_get_taxid(headerview, read).expect("getting read taxonid");
@@ -151,8 +165,10 @@ pub fn cluster_read_buckets(
                     // scale the mapper's call the number of kmers from that read that match its
                     // taxid.
                     let kmer_n = k2tax.get_kmer_calls(read.qname()).map(|row| row.get_taxid_kmer_count(map, *r2));
+                    // eprintln!("PASSING");
                     (map, cov.frac_matched() * kmer_n.unwrap_or(0) as f32)
                 } else {
+                    // eprintln!("FAILED");
                     (0_u32, f32::MIN) // below alignment thresholds
                 }
             })
@@ -226,14 +242,8 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
                 let reads = [Some(bucket.rec), bucket.mate];
 
                 if let Some(species) = taxonomy.species(call_taxid) {
-                    let hit_taxon = taxonomy.get(call_taxid).expect("Getting name for hit");
-
                     for rec in reads.iter().flatten() {
-                        lt.add_and_hash(
-                            &species.name,
-                            &hit_taxon.name,
-                            Range { start: rec.pos(), end: rec.reference_end() - 1 },
-                        );
+                        lt.add(&species.name, rec.tid(), Range { start: rec.pos(), end: rec.reference_end() - 1 });
 
                         seq_len += rec.seq_len();
                         n_passed += 1;
@@ -282,16 +292,15 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
 
         eprintln!("processed {i} records from {bam}");
 
-        let report = lt.resolve(args.min_loci_per_call, seq_len / n_passed);
-        if let Err(error) = report.serialize(&mut writer, reader.header(), basename) {
-            if to_stdout && is_broken_pipe(&error) {
-                return Ok(());
+        if n_passed > 0 {
+            let report = lt.resolve(args.min_loci_per_call, seq_len / n_passed);
+
+            if let Err(error) = report.serialize(&mut writer, &header, basename) {
+                if to_stdout && !is_broken_pipe(&error) {
+                    return Err(error);
+                }
             }
-
-            return Err(error);
         }
-
-        build_bam_index(&output_read_path, None, rust_htslib::bam::index::Type::Bai, num_cpus::get() as u32)?;
     }
 
     Ok(())

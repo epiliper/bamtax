@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use std::cell::UnsafeCell;
+use std::cell::RefCell;
 
 #[derive(Debug, Eq)]
 pub struct Taxon {
@@ -40,8 +40,8 @@ pub enum Rank {
 // Do not use with multiple threads.
 pub struct Taxonomy {
     nodes: HashMap<u32, Taxon>,
-    species_memo: UnsafeCell<HashMap<u32, Option<u32>>>,
-    genus_memo: UnsafeCell<HashMap<u32, Option<u32>>>,
+    species_memo: RefCell<HashMap<u32, Option<u32>>>,
+    genus_memo: RefCell<HashMap<u32, Option<u32>>>,
     children: HashMap<u32, Vec<u32>>,
 }
 
@@ -92,33 +92,31 @@ impl<'a> Taxonomy {
     }
 
     pub fn lookup(&self, tax_id: u32, rank: Rank) -> Option<&Taxon> {
-        unsafe {
-            let (memo, name) = match rank {
-                Rank::Species => (self.species_memo.get().as_mut().unwrap(), "species"),
-                Rank::Genus => (self.genus_memo.get().as_mut().unwrap(), "genus"),
-            };
+        let (mut memo, name) = match rank {
+            Rank::Species => (self.species_memo.borrow_mut(), "species"),
+            Rank::Genus => (self.genus_memo.borrow_mut(), "genus"),
+        };
 
-            let mut seen = HashSet::new();
-            let mut current = tax_id;
+        let mut seen = HashSet::new();
+        let mut current = tax_id;
 
-            loop {
-                if !seen.insert(current) {
-                    memo.insert(tax_id, None);
-                    return None;
-                }
-
-                let taxon = self.nodes.get(&current)?;
-
-                if taxon.rank == name {
-                    memo.insert(tax_id, Some(taxon.tax_id));
-                    return Some(taxon);
-                }
-                if taxon.parent_tax_id == current {
-                    memo.insert(tax_id, None);
-                    return None;
-                }
-                current = taxon.parent_tax_id;
+        loop {
+            if !seen.insert(current) {
+                memo.insert(tax_id, None);
+                return None;
             }
+
+            let taxon = self.nodes.get(&current)?;
+
+            if taxon.rank == name {
+                memo.insert(tax_id, Some(taxon.tax_id));
+                return Some(taxon);
+            }
+            if taxon.parent_tax_id == current {
+                memo.insert(tax_id, None);
+                return None;
+            }
+            current = taxon.parent_tax_id;
         }
     }
 
@@ -141,8 +139,8 @@ impl<'a> Taxonomy {
     fn from_readers(nodes: impl BufRead, names: impl BufRead) -> Result<Self> {
         let mut taxonomy = Self {
             nodes: HashMap::new(),
-            species_memo: UnsafeCell::new(HashMap::new()),
-            genus_memo: UnsafeCell::new(HashMap::new()),
+            species_memo: RefCell::new(HashMap::new()),
+            genus_memo: RefCell::new(HashMap::new()),
             children: HashMap::new(),
         };
 

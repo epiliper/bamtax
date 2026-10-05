@@ -10,11 +10,11 @@ pub struct ReadCover {
 
 impl ReadCover {
     pub fn frac_aligned(&self) -> f32 {
-        (self.bases_aligned / self.len) as f32
+        self.bases_aligned as f32 / self.len as f32
     }
 
     pub fn frac_matched(&self) -> f32 {
-        (self.bases_matched / self.len) as f32
+        self.bases_matched as f32 / self.len as f32
     }
 }
 
