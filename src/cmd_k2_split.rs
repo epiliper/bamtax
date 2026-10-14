@@ -146,7 +146,7 @@ pub fn k2_split_main(args: K2SplitArgs) -> Result<(), Error> {
         let mut input = FastqReader::new(FastqIn::from_file(fastq)?);
         while let Some(rec) = input.next() {
             let rec = rec?;
-            let id = rec.id()?;
+            let id = rec.id()?.trim_end_matches("/1").trim_end_matches("/2");
 
             if let Some(group) = reads_to_group.get(id) {
                 let writer = group_to_out.get_mut(group).expect("getting writer").get_mut(i).unwrap();
