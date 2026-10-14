@@ -96,6 +96,10 @@ pub struct K2SplitArgs {
     /// whether or not to gzip output fastqs
     #[arg(short, long)]
     pub gzip: bool,
+
+    /// Don't split the input file by k2 classification, just pair it with all taxa detected
+    #[arg(short, long)]
+    pub no_split: bool,
 }
 
 const HIGHEST_RANK_WE_PULL_READS_FROM: &str = "R2";
@@ -111,18 +115,39 @@ pub fn k2_split_main(args: K2SplitArgs) -> Result<(), Error> {
         .output_prefix
         .unwrap_or(args.report.split_once(".kreport2").expect("report should end in .kreport2").0.to_string());
 
+    let mut report = BufWriter::new(File::create(format!("{output_prefix}_groups.tsv"))?);
+
+    if args.no_split {
+        let taxa = k2taxonomy.rank_nodes("G").collect::<Vec<_>>();
+        let mut output_fastqs: Vec<String> = Vec::with_capacity(args.fastq.len());
+
+        for (i, fastq) in args.fastq.iter().enumerate() {
+            let output_fastq =
+                format!("{output_prefix}_chunks_whole_{}.fastq{}", i + 1, if args.gzip { ".gz" } else { "" });
+            std::fs::copy(fastq, &output_fastq)?;
+            output_fastqs.push(output_fastq);
+        }
+
+        let output_fastqs = output_fastqs.join(",");
+        for t in taxa.iter() {
+            writeln!(report, "{}\t{}\t{}", output_fastqs, t.row.name, t.row.taxid)?;
+        }
+
+        report.flush()?;
+        return Ok(());
+    }
+
     let mut reads_to_group: HashMap<String, u32> = HashMap::new();
     let mut group_to_out: HashMap<u32, Vec<FastqOut>> = HashMap::new();
 
     let r2_iter = k2taxonomy.rank_nodes(HIGHEST_RANK_WE_PULL_READS_FROM);
-    let mut report = BufWriter::new(File::create(format!("{output_prefix}_groups.tsv"))?);
 
     // 1. record which read names belong under which clusters, record genuses detected in report.
     for r2 in r2_iter {
         let mut out_fastq_names: Vec<String> = vec![];
         for (i, _fastq) in args.fastq.iter().enumerate() {
             let fastq_name =
-                format!("{output_prefix}_{}_{}.fastq{}", r2.row.name, i + 1, if args.gzip { ".gz" } else { "" });
+                format!("{output_prefix}_chunks_{}_{}.fastq{}", r2.row.name, i + 1, if args.gzip { ".gz" } else { "" });
             let writer = FastqOut::from_file(&fastq_name)?;
             group_to_out.entry(r2.row.taxid).or_default().push(writer);
 
