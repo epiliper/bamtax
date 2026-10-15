@@ -138,7 +138,7 @@ impl<'a> Taxonomy {
         })
     }
 
-    fn from_readers(nodes: impl BufRead, names: impl BufRead) -> Result<Self> {
+    pub(crate) fn from_readers(nodes: impl BufRead, names: impl BufRead) -> Result<Self> {
         let mut taxonomy = Self {
             nodes: HashMap::new(),
             species_memo: RefCell::new(HashMap::new()),

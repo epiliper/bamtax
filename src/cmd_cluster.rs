@@ -7,8 +7,10 @@ use rust_htslib::bam::{
 };
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
+use std::path::Path;
 
 use crate::filter_read::filter_read;
+use crate::html_report::{HtmlSample, write_html_report};
 use crate::k2_taxonomy::K2Taxonomy;
 use crate::locus_tracker::LocusTracker;
 use crate::sam_merge_buffer::{ReadBucket, SamMergeBuffer};
@@ -44,6 +46,18 @@ pub struct ClusterArgs {
     #[arg(short = 'o', default_value = "-")]
     pub output: String,
 
+    /// Write a combined, standalone HTML report
+    #[arg(long, value_name = "PATH")]
+    pub html_report: Option<String>,
+
+    /// KronaTools ktImportTaxonomy executable
+    #[arg(long, value_name = "PATH", requires = "html_report")]
+    pub krona_command: Option<String>,
+
+    /// Prepared KronaTools taxonomy database directory
+    #[arg(long, value_name = "PATH", requires = "html_report")]
+    pub krona_taxonomy: Option<String>,
+
     /// Delimiter to use in report
     #[arg(short = 'd', long, default_value = "\\t", value_parser = parse_delimiter)]
     pub delimiter: u8,
@@ -65,11 +79,11 @@ pub struct ClusterArgs {
     pub bams: Vec<String>,
 
     /// Input K2 report files. Using this option, k2-classifications are required
-    #[arg(short, long, required = false, num_args = 1..)]
+    #[arg(long, required = false, num_args = 1..)]
     pub k2_reports: Option<Vec<String>>,
 
     /// Input k2 per-read classifications. Should be with k2-reports
-    #[arg(short, long, required = false, num_args = 1..)]
+    #[arg(long, required = false, num_args = 1..)]
     pub k2_classifications: Option<Vec<String>>,
 
     /// Minimum # of loci per species to make a call
@@ -88,6 +102,18 @@ pub fn parse_delimiter(value: &str) -> Result<u8, String> {
     } else {
         Err("delimiter must be \\t or a single ASCII character".to_string())
     }
+}
+
+fn canonical_destination(path: &str) -> Result<std::path::PathBuf, Error> {
+    let path = Path::new(path);
+    let absolute = if path.is_absolute() { path.to_owned() } else { std::env::current_dir()?.join(path) };
+    if absolute.exists() {
+        return Ok(std::fs::canonicalize(absolute)?);
+    }
+
+    let parent = absolute.parent().context("output path has no parent directory")?;
+    let name = absolute.file_name().context("output path has no file name")?;
+    Ok(std::fs::canonicalize(parent)?.join(name))
 }
 
 #[inline(always)]
@@ -177,7 +203,8 @@ pub fn cluster_read_buckets(
                     // scale the mapper's call the number of kmers from that read that match its
                     // taxid.
                     let kmer_n = if let Some(k2tax) = k2tax {
-                        k2tax.get_kmer_calls(read.qname()).map(|row| row.get_taxid_kmer_count(map, *r2)).unwrap_or(0)
+                        1
+                        // k2tax.get_kmer_calls(read.qname()).map(|row| row.get_taxid_kmer_count(map, *r2)).unwrap_or(0)
                     } else {
                         1 // if no k2 provided, then we just take read alignments at face value
                     };
@@ -204,6 +231,15 @@ pub fn cluster_read_buckets(
 }
 
 pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
+    let html_report = args.html_report.clone();
+    let krona_command = args.krona_command.clone().unwrap_or_else(|| "ktImportTaxonomy".to_owned());
+    let krona_taxonomy = args.krona_taxonomy.clone();
+    if let Some(path) = html_report.as_deref()
+        && args.output != "-"
+        && canonical_destination(path)? == canonical_destination(&args.output)?
+    {
+        bail!("Table and HTML reports must use different output paths");
+    }
     let n = args.bams.len();
     let main_iter: Vec<(String, Option<(String, String)>)> = match (args.k2_reports, args.k2_classifications) {
         (None, None) => std::iter::zip(args.bams, std::iter::repeat_n(None, n)).collect(),
@@ -227,6 +263,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
     let output: Box<dyn Write> =
         if to_stdout { Box::new(io::stdout()) } else { Box::new(File::create(&args.output).context("create output")?) };
     let mut writer = csv::WriterBuilder::new().delimiter(args.delimiter).from_writer(output);
+    let mut html_samples = Vec::new();
 
     for (bam, k2) in main_iter {
         let mut merge = SamMergeBuffer::default();
@@ -319,7 +356,8 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         failed_read_writer.flush().expect("writer flush");
 
         eprintln!("processed {i} records from {bam}");
-        let mut krona_writer = BufWriter::new(File::create(basename.to_string() + ".krona")?);
+        let krona_path = basename.to_string() + ".krona";
+        let mut krona_writer = BufWriter::new(File::create(&krona_path)?);
 
         if n_passed > 0 {
             let report = lt.resolve(args.min_loci_per_call, seq_len / n_passed);
@@ -332,7 +370,17 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
             }
 
             report.serialize_krona(&mut krona_writer)?;
+
+            if html_report.is_some() {
+                html_samples.push(HtmlSample::from_report(basename, &report, &header));
+            }
+        } else if html_report.is_some() {
+            html_samples.push(HtmlSample::empty(basename));
         }
+    }
+
+    if let Some(path) = html_report {
+        write_html_report(path, &html_samples, &taxonomy, &krona_command, krona_taxonomy.as_deref().map(Path::new))?;
     }
 
     Ok(())

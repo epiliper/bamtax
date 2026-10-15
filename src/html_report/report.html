@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bamtax alignment report</title>
+  <style>
+<!-- BAMTAX:STYLE -->
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Detected taxa</h1>
+  </header>
+  <section class="card">
+    <div class="toolbar">
+      <label>Dataset
+        <select id="dataset" aria-label="Dataset">
+<!-- BAMTAX:DATASET_OPTIONS -->
+        </select>
+      </label>
+      <div>
+        <button type="button" id="expand">Expand all</button>
+        <button type="button" id="collapse">Collapse all</button>
+      </div>
+    </div>
+<!-- BAMTAX:TAXON_PANELS -->
+  </section>
+  <section class="card">
+    <div class="section-head"><h2>Krona overview</h2></div>
+<!-- BAMTAX:KRONA -->
+  </section>
+  <dialog id="extract-dialog">
+    <h2>Extract reads</h2>
+    <textarea id="extract-command" readonly aria-label="Extract command"></textarea>
+    <div class="dialog-actions">
+      <span id="copy-status" role="status"></span>
+      <button type="button" id="copy-command">Copy command</button>
+      <form method="dialog"><button type="submit">Close</button></form>
+    </div>
+  </dialog>
+</main>
+<script>
+<!-- BAMTAX:SCRIPT -->
+</script>
+</body>
+</html>

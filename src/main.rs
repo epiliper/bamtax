@@ -12,6 +12,7 @@ pub mod cmd_taxosplit;
 mod assembly_dir_iterator;
 mod bam_utils;
 mod filter_read;
+mod html_report;
 mod k2_taxonomy;
 mod k2_utils;
 mod locus_tracker;
