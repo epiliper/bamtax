@@ -20,9 +20,9 @@ body {
 }
 
 main {
-  width: min(1440px, 96vw);
+  width: 96vw;
   margin: 0 auto;
-  padding: 32px 0 48px;
+  padding: clamp(20px, 3vw, 32px) 0 clamp(32px, 4vw, 48px);
 }
 
 h1 {
@@ -34,6 +34,16 @@ h1 {
 }
 
 h2 { margin: 0; font-size: 18px; }
+
+.report-toolbar {
+  position: sticky;
+  top: 2vh;
+  z-index: 20;
+  padding: .75em 1em;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 6px 18px rgba(18, 40, 31, .08);
+}
 
 .toolbar,
 .section-head {
@@ -62,22 +72,51 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 6px 24px rgba(18, 40, 31, .05);
+  padding: clamp(12px, 1.5vw, 18px);
+}
+
+.report-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: flex-start;
   margin-top: 18px;
-  padding: 18px;
+}
+
+.taxa-card {
+  min-width: 0;
+}
+
+.krona-card {
+  min-width: 0;
+  container-type: inline-size;
+}
+
+@media (min-aspect-ratio: 3 / 2) {
+  .report-layout {
+    grid-template-columns: minmax(min-content, 58%) minmax(0, 1fr);
+  }
+
+  .krona-card {
+    position: sticky;
+    top: 2vh;
+  }
 }
 
 .tree-scroll { overflow-x: auto; margin-top: 12px; }
-.tree { min-width: 920px; border-top: 1px solid var(--line); }
+.tree { min-width: 100%; border-top: 1px solid var(--line); }
 
 .row {
   display: grid;
-  grid-template-columns: minmax(280px, 2.2fr) minmax(90px, .7fr) minmax(85px, .6fr) minmax(65px, .45fr) minmax(70px, .5fr) minmax(180px, 1.35fr) minmax(90px, .6fr);
+  grid-template-columns: minmax(24ch, 2.5fr) minmax(8ch, .7fr) minmax(10ch, .6fr) minmax(5ch, .45fr) minmax(7ch, .5fr) minmax(10ch, .5fr) minmax(7ch, .6fr);
   gap: 12px;
   align-items: center;
   min-height: 39px;
   padding: 7px 10px;
   border-bottom: 1px solid var(--line);
 }
+
+.row > * { min-width: 0; }
 
 .header {
   min-height: auto;
@@ -88,6 +127,8 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   letter-spacing: .04em;
   text-transform: uppercase;
 }
+
+.header > * { white-space: nowrap; }
 
 summary.row { cursor: pointer; background: #fbfdfc; }
 summary.row:hover,
@@ -111,11 +152,10 @@ details > summary::-webkit-details-marker { display: none; }
 }
 
 details[open] > summary .toggle { transform: rotate(90deg); }
-.children { margin-left: 20px; border-left: 2px solid #e5ebe7; }
+.taxon-cell { padding-left: calc(var(--depth, 0) * 1.25em); }
 .taxon { font-weight: 650; }
-.meta,
-.references { color: var(--muted); font-size: 12px; }
-.references { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { color: var(--muted); font-size: 12px; }
+.references-button { justify-self: start; min-width: 38px; padding: 4px 8px; font-size: 12px; }
 .extract-button { justify-self: start; padding: 4px 8px; font-size: 12px; }
 .empty,
 .notice { color: var(--muted); padding: 22px; text-align: center; }
@@ -124,7 +164,8 @@ details[open] > summary .toggle { transform: rotate(90deg); }
 
 iframe {
   width: 100%;
-  height: min(76vh, 820px);
+  height: 70vh;
+  height: min(76vh, 100cqw);
   border: 1px solid var(--line);
   border-radius: 8px;
   margin-top: 12px;
@@ -161,8 +202,17 @@ dialog textarea {
 
 #copy-status { color: var(--muted); margin-right: auto; }
 
-@media (max-width: 700px) {
-  main { padding-top: 20px; }
-  .card { padding: 12px; }
-  .toolbar { align-items: flex-start; flex-direction: column; }
+#references-list {
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  margin: 12px 0 18px;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+#references-list li {
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
 }

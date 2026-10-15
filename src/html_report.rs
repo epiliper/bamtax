@@ -264,7 +264,7 @@ fn render_panel<'a>(
         let mut nodes = tree.children.values().collect::<Vec<_>>();
         sort_nodes(&mut nodes);
         for node in nodes {
-            render_node(html, node);
+            render_node(html, node, 0);
         }
     }
     html.push_str("      </div></div>\n    </div>\n");
@@ -336,34 +336,34 @@ fn sort_nodes(nodes: &mut Vec<&TreeNode>) {
     nodes.sort_by(|a, b| b.depth.cmp(&a.depth).then_with(|| a.name.cmp(&b.name)).then_with(|| a.tax_id.cmp(&b.tax_id)));
 }
 
-fn render_node(html: &mut String, node: &TreeNode) {
+fn render_node(html: &mut String, node: &TreeNode, depth: usize) {
     let species_class = if node.rank == "species" { " species-call" } else { "" };
     if node.children.is_empty() {
-        let _ = write!(html, "        <div class=\"row leaf{}\">", species_class);
+        let _ = write!(html, "        <div class=\"row leaf{}\" style=\"--depth:{}\">", species_class, depth);
         render_cells(html, node, false);
         html.push_str("</div>\n");
         return;
     }
 
-    let _ = write!(html, "        <details><summary class=\"row{}\">", species_class);
+    let _ = write!(html, "        <details><summary class=\"row{}\" style=\"--depth:{}\">", species_class, depth);
     render_cells(html, node, true);
     html.push_str("</summary><div class=\"children\">\n");
     let mut children = node.children.values().collect::<Vec<_>>();
     sort_nodes(&mut children);
     for child in children {
-        render_node(html, child);
+        render_node(html, child, depth + 1);
     }
     html.push_str("        </div></details>\n");
 }
 
 fn render_cells(html: &mut String, node: &TreeNode, expandable: bool) {
     let tax_id = node.tax_id.map(|id| format!("taxid {id}")).unwrap_or_else(|| "synthetic group".to_owned());
-    let references = node.references.iter().cloned().collect::<Vec<_>>().join("; ");
+    let references = node.references.iter().cloned().collect::<Vec<_>>().join("\n");
     let command = extract_command(&node.extract_calls);
     let toggle = if expandable { "<span class=\"toggle\" aria-hidden=\"true\">▸</span>" } else { "" };
     let _ = write!(
         html,
-        "<span>{}<span class=\"taxon\">{}</span><br><span class=\"meta\">{}</span></span><span>{}</span><span>{}</span><span>{}</span><span>{}</span><span class=\"references\" title=\"{}\">{}</span><button type=\"button\" class=\"extract-button\" data-command=\"{}\" title=\"Copy command for {} species call{}\">Extract</button>",
+        "<span class=\"taxon-cell\">{}<span class=\"taxon\">{}</span><br><span class=\"meta\">{}</span></span><span>{}</span><span>{}</span><span>{}</span><span>{}</span><button type=\"button\" class=\"references-button\" data-taxon=\"{}\" data-references=\"{}\" aria-label=\"Show {} references for {}\">{}</button><button type=\"button\" class=\"extract-button\" data-command=\"{}\" title=\"Copy command for {} species call{}\">Extract</button>",
         toggle,
         escape_html(&node.name),
         tax_id,
@@ -371,8 +371,11 @@ fn render_cells(html: &mut String, node: &TreeNode, expandable: bool) {
         node.depth,
         node.loci,
         node.samples.len(),
+        escape_html(&node.name),
         escape_html(&references),
-        escape_html(&references),
+        node.references.len(),
+        escape_html(&node.name),
+        node.references.len(),
         escape_html(&command),
         node.extract_calls.len(),
         if node.extract_calls.len() == 1 { "" } else { "s" },
@@ -510,11 +513,26 @@ mod tests {
         ];
         let html = render_report(&samples, &taxonomy(), Err("Krona <unavailable>"));
 
-        assert!(html.contains("<details><summary class=\"row\">"));
+        assert!(html.contains("<details><summary class=\"row\" style=\"--depth:0\">"));
+        assert!(html.contains("class=\"row leaf species-call\" style=\"--depth:3\""));
+        assert!(html.contains("class=\"taxon-cell\""));
         assert!(html.contains("aria-hidden=\"true\">▸</span>"));
         assert!(html.contains("class=\"row leaf species-call\""));
         assert!(html.contains("class=\"extract-button\""));
+        assert!(html.contains("class=\"references-button\""));
+        assert!(html.contains("class=\"report-layout\""));
+        assert!(html.contains("class=\"toolbar report-toolbar\""));
+        assert!(html.contains("class=\"card taxa-card\">\n      <div class=\"toolbar report-toolbar\""));
+        assert!(html.contains("class=\"card taxa-card\""));
+        assert!(html.contains("class=\"card krona-card\""));
+        assert!(html.contains("@media (min-aspect-ratio: 3 / 2)"));
+        assert!(!html.contains("@media (max-width:"));
+        assert!(html.contains("grid-template-columns: minmax(24ch, 2.5fr)"));
+        assert!(!html.contains("grid-template-columns: subgrid"));
+        assert!(html.contains("position: sticky"));
+        assert!(!html.contains("--toolbar-height"));
         assert!(html.contains("id=\"extract-dialog\""));
+        assert!(html.contains("id=\"references-dialog\""));
         assert!(!html.contains("<details open"));
         assert!(!html.contains("Georgia"));
         assert!(!html.contains("Alignment-supported species"));
@@ -524,8 +542,27 @@ mod tests {
         assert!(html.contains("Krona &lt;unavailable&gt;"));
         assert!(html.contains("id=\"panel-2\" hidden"));
         assert!(html.contains("type: 'bamtax-dataset'"));
+        assert!(html.contains("message.type === 'bamtax-dataset-selected'"));
+        assert!(html.contains("selectDataset(message.index, false)"));
         assert!(html.contains("--species: #fff0d8"));
         assert!(!html.contains("<!-- BAMTAX:"));
+    }
+
+    #[test]
+    fn renders_sorted_reference_count_buttons() {
+        let samples = [sample(
+            "one",
+            vec![SpeciesSummary {
+                tax_id: 30,
+                depth: 1,
+                loci: 1,
+                references: vec!["ref-b".to_owned(), "ref-<a>".to_owned()],
+            }],
+        )];
+        let html = render_report(&samples, &taxonomy(), Err("no Krona"));
+
+        assert!(html.contains("data-references=\"ref-&lt;a&gt;\nref-b\""));
+        assert!(html.contains("aria-label=\"Show 2 references for Alpha &lt;species&gt;\">2</button>"));
     }
 
     #[test]
@@ -571,7 +608,11 @@ mod tests {
         let html = inject_krona_bridge("<html><body>chart</body></html>".to_owned());
 
         assert!(html.contains("message.type === 'bamtax-dataset'"));
-        assert!(html.contains("selectDataset(message.index)"));
+        assert!(html.contains("window.selectDataset(message.index)"));
+        assert!(html.contains("type: 'bamtax-dataset-selected'"));
+        assert!(html.contains("bamtaxSelectDataset(index)"));
+        assert!(html.contains("hideKronaDatasetControls"));
+        assert!(html.contains("controls.hidden = true"));
         assert!(html.find("bamtax-dataset").unwrap() < html.find("</body>").unwrap());
     }
 

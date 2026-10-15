@@ -15,9 +15,32 @@ function syncKrona() {
   }
 }
 
-selector.addEventListener('change', () => {
-  panels.forEach(panel => panel.hidden = panel.id !== selector.value);
-  syncKrona();
+function selectDataset(index, notifyKrona) {
+  const value = `panel-${index}`;
+  if (!document.getElementById(value)) {
+    return;
+  }
+
+  selector.value = value;
+  panels.forEach(panel => panel.hidden = panel.id !== value);
+  if (notifyKrona) {
+    syncKrona();
+  }
+}
+
+selector.addEventListener('change', () => selectDataset(Number(selector.value.slice(6)), true));
+
+window.addEventListener('message', event => {
+  const message = event.data;
+  if (
+    krona &&
+    event.source === krona.contentWindow &&
+    message &&
+    message.type === 'bamtax-dataset-selected' &&
+    Number.isInteger(message.index)
+  ) {
+    selectDataset(message.index, false);
+  }
 });
 
 if (krona) {
@@ -71,3 +94,28 @@ document.querySelectorAll('.extract-button').forEach(button => {
 });
 
 document.getElementById('copy-command').addEventListener('click', copyExtractCommand);
+
+const referencesDialog = document.getElementById('references-dialog');
+const referencesTitle = document.getElementById('references-title');
+const referencesList = document.getElementById('references-list');
+
+document.querySelectorAll('.references-button').forEach(button => {
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    referencesTitle.textContent = `References for ${button.dataset.taxon}`;
+    referencesList.replaceChildren();
+
+    button.dataset.references.split('\n').filter(Boolean).forEach(reference => {
+      const item = document.createElement('li');
+      item.textContent = reference;
+      referencesList.appendChild(item);
+    });
+
+    if (referencesDialog.showModal) {
+      referencesDialog.showModal();
+    } else {
+      referencesDialog.setAttribute('open', '');
+    }
+  });
+});
