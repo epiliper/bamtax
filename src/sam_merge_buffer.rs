@@ -1,5 +1,4 @@
 use rust_htslib::bam::record::Record;
-use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -31,14 +30,14 @@ pub struct ReadBucket {
 #[derive(Default)]
 pub struct SamMergeBuffer {
     q: Vec<ReadBucket>,
-    read_ids: HashSet<u64>,
+    read_id: u64,
 }
 
 impl SamMergeBuffer {
     pub fn intake(&mut self, record: &Record, src: &str) -> Option<Vec<ReadBucket>> {
         let hash = ReadHash::from_read_and_source(record, src);
 
-        if self.read_ids.contains(&hash.name_hash) {
+        if self.read_id == hash.name_hash {
             // already encountered this mate. So add and keep going.
             self.update_mate(record, hash);
             None
@@ -46,8 +45,7 @@ impl SamMergeBuffer {
             // we encountered a read QNAME we haven't seen before. Assuming a name-sorted BAM file,
             // this means we can emit the reads we've been holding in the queue.
             let ret = std::mem::take(&mut self.q);
-            self.read_ids.clear();
-            self.read_ids.insert(hash.name_hash);
+            self.read_id = hash.name_hash;
             self.q.push(ReadBucket { hash, rec: record.clone(), mate: None });
             Some(ret)
         }
