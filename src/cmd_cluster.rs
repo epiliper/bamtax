@@ -2,18 +2,15 @@
 use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Error, bail};
 use clap::Parser;
-use rust_htslib::bam::{
-    Header, HeaderView, Read, Reader as BamReader, Record, Writer as BamWriter, ext::BamRecordExtensions, record::Aux,
-};
+use rust_htslib::bam::{Header, HeaderView, Read, Reader as BamReader, Record, Writer as BamWriter, record::Aux};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use crate::filter_read::filter_read;
 use crate::html_report::{HtmlSample, write_html_report};
 use crate::k2_taxonomy::K2Taxonomy;
 use crate::locus_tracker::LocusTracker;
-use crate::sam_merge_buffer::{ReadBucket, SamMergeBuffer};
+use crate::sam_merge_buffer::{ClusterAlignment, ReadBucket, SamMergeBuffer};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Range {
@@ -172,9 +169,6 @@ pub fn get_read_src(record: &Record) -> &str {
 pub fn cluster_read_buckets(
     read_buckets: Vec<ReadBucket>,
     k2tax: Option<&K2Taxonomy>,
-    headerview: &HeaderView,
-    min_frac_aligned: f32,
-    min_frac_matched: f32,
 ) -> Result<Option<(ReadBucket, u32)>, Error> {
     if read_buckets.is_empty() {
         return Ok(None);
@@ -184,35 +178,25 @@ pub fn cluster_read_buckets(
     let mut winning_hit: u32 = 0;
     let mut winning_bucket: Option<ReadBucket> = None;
 
+    #[allow(unused_variables)]
     for bucket in read_buckets {
-        let r1_cov = filter_read(&bucket.rec)?;
-        let r2_cov = bucket.mate.as_ref().map(filter_read).transpose()?;
-
-        let checks =
-            [Some((r1_cov, &bucket.rec, false)), r2_cov.map(|r2_cov| (r2_cov, bucket.mate.as_ref().unwrap(), true))];
+        let checks = [Some((&bucket.rec, false)), bucket.mate.as_ref().map(|mate| (mate, true))];
 
         // tie-break between mates if they are chimeric
         let (pair_hit, pair_score) = checks
             .iter()
             .flatten()
-            .map(|(cov, read, r2)| {
-                if cov.frac_aligned() >= min_frac_aligned && cov.frac_matched() >= min_frac_matched {
-                    // get the taxid the mapper called
-                    let map = record_get_taxid(headerview, read).expect("getting read taxonid");
-
-                    // scale the mapper's call the number of kmers from that read that match its
-                    // taxid.
-                    let kmer_n = if let Some(k2tax) = k2tax {
-                        1
-                        // k2tax.get_kmer_calls(read.qname()).map(|row| row.get_taxid_kmer_count(map, *r2)).unwrap_or(0)
-                    } else {
-                        1 // if no k2 provided, then we just take read alignments at face value
-                    };
-
-                    (map, cov.frac_matched() * kmer_n as f32)
+            .map(|(read, r2)| {
+                // scale the mapper's call the number of kmers from that read that match its
+                // taxid.
+                let kmer_n = if let Some(k2tax) = k2tax {
+                    1
+                    // k2tax.get_kmer_calls(read.qname()).map(|row| row.get_taxid_kmer_count(map, *r2)).unwrap_or(0)
                 } else {
-                    (0_u32, f32::MIN) // below alignment thresholds
-                }
+                    1 // if no k2 provided, then we just take read alignments at face value
+                };
+
+                (read.taxid, read.cover.frac_matched() * kmer_n as f32)
             })
             .max_by(|(_ahit, ascore), (_bhit, bscore)| {
                 bscore.partial_cmp(ascore).expect("Invalid floating point score comparison")
@@ -284,9 +268,9 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         let mut failed_read_writer = std::io::BufWriter::new(
             std::fs::File::create(format!("{basename}_failed_reads.txt")).context("create failed reads file")?,
         );
-        let output_read_path = format!("{basename}_bamtax.bam");
-        let mut read_writer =
-            BamWriter::from_path(&output_read_path, &Header::from_template(header), rust_htslib::bam::Format::Bam)?;
+        // let output_read_path = format!("{basename}_bamtax.bam");
+        // let mut read_writer =
+        // BamWriter::from_path(&output_read_path, &Header::from_template(header), rust_htslib::bam::Format::Bam)?;
 
         let mut rec = Record::new();
         let mut i = 0;
@@ -297,32 +281,26 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
 
         /////////////// BEGIN CLOSURE
         let mut handle_buckets = |buckets: Vec<ReadBucket>| -> Result<(), Error> {
-            if let Some((bucket, call_taxid)) = cluster_read_buckets(
-                buckets,
-                k2taxon.as_ref(),
-                &header,
-                args.min_frac_read_aligned,
-                args.min_frac_read_matched,
-            )? {
+            if let Some((bucket, call_taxid)) = cluster_read_buckets(buckets, k2taxon.as_ref())? {
                 let reads = [Some(bucket.rec), bucket.mate];
 
                 if let Some(species) = taxonomy.species(call_taxid) {
                     for rec in reads.iter().flatten() {
-                        lt.add(species.tax_id, rec.tid(), Range { start: rec.pos(), end: rec.reference_end() - 1 });
+                        lt.add(species.tax_id, rec.tid, rec.map_interval);
 
-                        seq_len += rec.seq_len();
+                        seq_len += rec.seq_len;
                         n_passed += 1;
-                        read_writer.write(rec)?;
+                        // read_writer.write(rec)?;
                     }
                 } else {
                     eprintln!("Warning: failed to find species for taxon id {}. Skipping...", call_taxid);
 
-                    for rec in reads.iter().flatten() {
-                        failed_read_writer.write(rec.qname())?;
-                        failed_read_writer.write(b"\t")?;
-                        failed_read_writer.write(tid2name(&header, rec.tid())?)?;
-                        failed_read_writer.write(b"\n")?;
-                    }
+                    // for rec in reads.iter().flatten() {
+                    //     failed_read_writer.write(rec.qname())?;
+                    //     failed_read_writer.write(b"\t")?;
+                    //     failed_read_writer.write(tid2name(&header, rec.tid())?)?;
+                    //     failed_read_writer.write(b"\n")?;
+                    // }
                 }
             }
 
@@ -332,16 +310,25 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
 
         while let Some(result) = reader.read(&mut rec) {
             result.context("read record")?;
+            i += 1;
 
             if rec.is_unmapped() || rec.is_secondary() || rec.is_supplementary() {
                 continue;
             }
 
-            if let Some(buckets) = merge.intake(&rec, get_read_src(&rec)) {
+            let alignment =
+                ClusterAlignment::from_read_and_source(&rec, record_get_taxid(&header, &rec)?, get_read_src(&rec))?;
+
+            if alignment.cover.frac_aligned() < args.min_frac_read_aligned
+                || alignment.cover.frac_matched() < args.min_frac_read_matched
+            {
+                continue;
+            }
+
+            if let Some(buckets) = merge.intake(alignment) {
                 handle_buckets(buckets)?;
             }
 
-            i += 1;
             if i % 1000 == 0 {
                 eprintln!("processed {i} records from {}", &bam);
             }

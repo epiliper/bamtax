@@ -1,7 +1,12 @@
-use rust_htslib::bam::record::Record;
+use crate::{
+    cmd_cluster::Range,
+    filter_read::{ReadCover, filter_read},
+};
+use anyhow::Error;
+use rust_htslib::bam::{ext::BamRecordExtensions, record::Record};
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ReadHash {
     name_hash: u64,
     source_hash: u64,
@@ -21,10 +26,31 @@ impl ReadHash {
     }
 }
 
+/// min amount of info to keep in merge buffer. Don't want to clone records to store info I don't
+/// need.
+#[derive(Debug)]
+pub struct ClusterAlignment {
+    hash: ReadHash,
+    pub seq_len: usize,
+    pub tid: i32,
+    pub taxid: u32,
+    pub map_interval: Range,
+    pub cover: ReadCover,
+}
+
+impl ClusterAlignment {
+    pub fn from_read_and_source(read: &Record, taxid: u32, source: &str) -> Result<Self, Error> {
+        let hash = ReadHash::from_read_and_source(read, source);
+        let map_interval = Range { start: read.pos(), end: read.reference_end() - 1 };
+        let cover = filter_read(read)?;
+        let seq_len = read.seq_len();
+        Ok(Self { hash, tid: read.tid(), seq_len, taxid, cover, map_interval })
+    }
+}
+
 pub struct ReadBucket {
-    pub hash: ReadHash,
-    pub rec: Record,
-    pub mate: Option<Record>,
+    pub rec: ClusterAlignment,
+    pub mate: Option<ClusterAlignment>,
 }
 
 #[derive(Default)]
@@ -34,34 +60,32 @@ pub struct SamMergeBuffer {
 }
 
 impl SamMergeBuffer {
-    pub fn intake(&mut self, record: &Record, src: &str) -> Option<Vec<ReadBucket>> {
-        let hash = ReadHash::from_read_and_source(record, src);
-
-        if self.read_id == hash.name_hash {
+    pub fn intake(&mut self, aln: ClusterAlignment) -> Option<Vec<ReadBucket>> {
+        if self.read_id == aln.hash.name_hash {
             // already encountered this mate. So add and keep going.
-            self.update_mate(record, hash);
+            self.update_mate(aln);
             None
         } else {
             // we encountered a read QNAME we haven't seen before. Assuming a name-sorted BAM file,
             // this means we can emit the reads we've been holding in the queue.
             let ret = std::mem::take(&mut self.q);
-            self.read_id = hash.name_hash;
-            self.q.push(ReadBucket { hash, rec: record.clone(), mate: None });
+            self.read_id = aln.hash.name_hash;
+            self.q.push(ReadBucket { rec: aln, mate: None });
             Some(ret)
         }
     }
 
-    pub fn update_mate(&mut self, rec: &Record, hash: ReadHash) {
+    pub fn update_mate(&mut self, aln: ClusterAlignment) {
         for node in self.q.iter_mut() {
-            if node.hash == hash {
+            if node.rec.hash == aln.hash {
                 assert!(node.mate.is_none());
-                node.mate = Some(rec.clone());
+                node.mate = Some(aln);
                 return;
             }
         }
 
         // no mate found with same name and source, so update queue.
-        self.q.push(ReadBucket { hash, rec: rec.clone(), mate: None });
+        self.q.push(ReadBucket { rec: aln, mate: None });
     }
 
     pub fn flush(&mut self) -> Vec<ReadBucket> {

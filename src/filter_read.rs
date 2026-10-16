@@ -2,6 +2,7 @@ use crate::cmd_build_db::base_is_nonambig;
 use anyhow::Error;
 use rust_htslib::bam::record::{Cigar, Record};
 
+#[derive(Debug)]
 pub struct ReadCover {
     bases_aligned: usize,
     bases_matched: usize,
