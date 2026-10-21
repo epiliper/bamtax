@@ -286,7 +286,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
 
                 if let Some(species) = taxonomy.species(call_taxid) {
                     for rec in reads.iter().flatten() {
-                        lt.add(species.tax_id, rec.tid, rec.map_interval);
+                        lt.add(&rec.name, rec.forward, species.tax_id, rec.tid, rec.map_interval);
 
                         seq_len += rec.seq_len;
                         n_passed += 1;
@@ -295,12 +295,12 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
                 } else {
                     eprintln!("Warning: failed to find species for taxon id {}. Skipping...", call_taxid);
 
-                    // for rec in reads.iter().flatten() {
-                    //     failed_read_writer.write(rec.qname())?;
-                    //     failed_read_writer.write(b"\t")?;
-                    //     failed_read_writer.write(tid2name(&header, rec.tid())?)?;
-                    //     failed_read_writer.write(b"\n")?;
-                    // }
+                    for rec in reads.iter().flatten() {
+                        failed_read_writer.write(&rec.name)?;
+                        failed_read_writer.write(b"\t")?;
+                        failed_read_writer.write(tid2name(&header, rec.tid)?)?;
+                        failed_read_writer.write(b"\n")?;
+                    }
                 }
             }
 
@@ -359,10 +359,10 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
             report.serialize_krona(&mut krona_writer)?;
 
             if html_report.is_some() {
-                html_samples.push(HtmlSample::from_report(basename, &report, &header));
+                html_samples.push(HtmlSample::from_report(basename, &bam, &report, &header));
             }
         } else if html_report.is_some() {
-            html_samples.push(HtmlSample::empty(basename));
+            html_samples.push(HtmlSample::empty(basename, &bam));
         }
     }
 

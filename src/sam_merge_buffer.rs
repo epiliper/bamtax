@@ -32,6 +32,8 @@ impl ReadHash {
 pub struct ClusterAlignment {
     hash: ReadHash,
     pub seq_len: usize,
+    pub name: Vec<u8>,
+    pub forward: bool,
     pub tid: i32,
     pub taxid: u32,
     pub map_interval: Range,
@@ -44,7 +46,16 @@ impl ClusterAlignment {
         let map_interval = Range { start: read.pos(), end: read.reference_end() - 1 };
         let cover = filter_read(read)?;
         let seq_len = read.seq_len();
-        Ok(Self { hash, tid: read.tid(), seq_len, taxid, cover, map_interval })
+        Ok(Self {
+            hash,
+            name: read.qname().to_vec(),
+            forward: !read.is_reverse(),
+            tid: read.tid(),
+            seq_len,
+            taxid,
+            cover,
+            map_interval,
+        })
     }
 }
 

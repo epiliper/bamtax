@@ -37,9 +37,6 @@ struct SpeciesSummary {
 #[derive(Clone)]
 struct ExtractCall {
     source: String,
-    target: String,
-    depth: usize,
-    loci: usize,
     references: String,
 }
 
@@ -57,7 +54,7 @@ struct TreeNode {
 }
 
 impl HtmlSample {
-    pub fn from_report(name: &str, report: &AlignmentReport, header: &HeaderView) -> Self {
+    pub fn from_report(name: &str, source: &str, report: &AlignmentReport, header: &HeaderView) -> Self {
         let mut species = report
             .alns
             .iter()
@@ -76,11 +73,11 @@ impl HtmlSample {
             .collect::<Vec<_>>();
         species.sort_by_key(|summary| summary.tax_id);
 
-        Self { name: name.to_owned(), extract_source: absolute_source(name), species }
+        Self { name: name.to_owned(), extract_source: absolute_source(source), species }
     }
 
-    pub fn empty(name: &str) -> Self {
-        Self { name: name.to_owned(), extract_source: absolute_source(name), species: Vec::new() }
+    pub fn empty(name: &str, source: &str) -> Self {
+        Self { name: name.to_owned(), extract_source: absolute_source(source), species: Vec::new() }
     }
 }
 
@@ -279,13 +276,8 @@ fn build_tree(samples: &[&HtmlSample], taxonomy: &Taxonomy) -> TreeNode {
                 .filter(|taxon| !taxon.name.is_empty())
                 .map(|taxon| taxon.name.clone())
                 .unwrap_or_else(|| species.tax_id.to_string());
-            let extract_call = ExtractCall {
-                source: sample.extract_source.clone(),
-                target: species_name.clone(),
-                depth: species.depth,
-                loci: species.loci,
-                references: species.references.join(";"),
-            };
+            let extract_call =
+                ExtractCall { source: sample.extract_source.clone(), references: species.references.join(";") };
             let lineage = taxonomy.lineage(species.tax_id).unwrap_or_default();
             let path = if let Some(family) = lineage.iter().position(|taxon| taxon.rank == "family") {
                 lineage[family..]
@@ -383,29 +375,35 @@ fn render_cells(html: &mut String, node: &TreeNode, expandable: bool) {
 }
 
 fn extract_command(calls: &[ExtractCall]) -> String {
-    let out_dir = absolute_source("extracted");
-    let mut rows = String::new();
-    for call in calls {
-        let record = [
-            call.source.clone(),
-            call.target.clone(),
-            call.depth.to_string(),
-            call.loci.to_string(),
-            call.references.clone(),
-        ];
-        let mut writer = csv::WriterBuilder::new().has_headers(false).delimiter(b'\t').from_writer(Vec::new());
-        writer.write_record(record).expect("write extraction row to memory");
-        let row = String::from_utf8(writer.into_inner().expect("finish extraction row"))
-            .expect("CSV writer preserves UTF-8 input");
-        rows.push_str(row.trim_end_matches(['\r', '\n']));
-        rows.push('\n');
-    }
+    calls
+        .iter()
+        .map(|call| {
+            let references = call
+                .references
+                .split(';')
+                .map(|reference| format!("keep[\"{}\"] = 1", escape_awk_string(reference)))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let program = format!("BEGIN {{ {references} }} $3 in keep");
+            format!("samtools view {} | awk -F '\\t' {}", shell_quote(&call.source), shell_quote(&program))
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
 
-    let mut delimiter = "BAMTAX_ROWS".to_owned();
-    while rows.lines().any(|line| line == delimiter) {
-        delimiter.push('_');
+fn escape_awk_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(character),
+        }
     }
-    format!("bamtax extract --rows-stdin --out-dir {} <<'{}'\n{}{}", shell_quote(&out_dir), delimiter, rows, delimiter)
+    escaped
 }
 
 fn shell_quote(value: &str) -> String {
@@ -566,30 +564,30 @@ mod tests {
     }
 
     #[test]
-    fn creates_repeatable_extract_commands_for_parent_nodes() {
+    fn creates_streaming_awk_commands_for_parent_nodes() {
         let samples =
             [sample("one", vec![species(30, 3, 2, "ref-a")]), sample("two", vec![species(30, 4, 1, "ref-b")])];
         let tree = build_tree(&samples.iter().collect::<Vec<_>>(), &taxonomy());
         let command = extract_command(&tree.children[&Some(10)].extract_calls);
 
-        assert!(command.starts_with("bamtax extract --rows-stdin --out-dir '"));
-        assert!(command.contains("\none\tAlpha <species>\t3\t2\tref-a\n"));
-        assert!(command.contains("two\tAlpha <species>\t4\t1\tref-b\n"));
-        assert!(command.ends_with("BAMTAX_ROWS"));
+        assert_eq!(
+            command,
+            "samtools view 'one' | awk -F '\\t' 'BEGIN { keep[\"ref-a\"] = 1 } $3 in keep'; \
+             samtools view 'two' | awk -F '\\t' 'BEGIN { keep[\"ref-b\"] = 1 } $3 in keep'"
+        );
     }
 
     #[test]
-    fn avoids_heredoc_delimiters_found_in_rows() {
+    fn quotes_paths_and_escapes_awk_strings() {
         let command = extract_command(&[ExtractCall {
-            source: "one\nBAMTAX_ROWS\nbad".to_owned(),
-            target: "species".to_owned(),
-            depth: 1,
-            loci: 1,
-            references: "ref".to_owned(),
+            source: "one's reads".to_owned(),
+            references: "ref\"1;ref\\2".to_owned(),
         }]);
 
-        assert!(command.contains("<<'BAMTAX_ROWS_'"));
-        assert!(command.ends_with("BAMTAX_ROWS_"));
+        assert_eq!(
+            command,
+            "samtools view 'one'\"'\"'s reads' | awk -F '\\t' 'BEGIN { keep[\"ref\\\"1\"] = 1; keep[\"ref\\\\2\"] = 1 } $3 in keep'"
+        );
     }
 
     #[test]

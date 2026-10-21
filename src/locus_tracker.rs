@@ -6,11 +6,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Alignment {
     pub tid: u64,
     pub depth: usize,
     pub span: Range,
+}
+
+impl Alignment {
+    pub fn overlaps(&self, other: &Alignment) -> bool {
+        (self.span.start <= other.span.start && self.span.end >= other.span.end)
+            || (self.span.start >= other.span.start && self.span.end <= other.span.end)
+    }
 }
 
 pub struct AlignmentReport {
@@ -78,8 +85,14 @@ impl LocusTracker {
         Self { map: HashMap::new() }
     }
 
-    pub fn add(&mut self, target: u32, tid: i32, range: Range) {
-        self.map.entry(target).or_default().push(Alignment { tid: tid as u64, span: range, depth: 1 });
+    pub fn add(&mut self, name: &[u8], forward: bool, target: u32, tid: i32, range: Range) {
+        self.map.entry(target).or_default().push(Alignment {
+            // name: name.to_vec(),
+            // forward,
+            tid: tid as u64,
+            span: range,
+            depth: 1,
+        });
     }
 
     pub fn resolve(&mut self, min_calls_per_loci: usize, read_len: usize) -> AlignmentReport {
@@ -87,15 +100,17 @@ impl LocusTracker {
 
         let mut report = AlignmentReport { alns: HashMap::with_capacity(self.map.len()) };
 
+        // eprintln!("{:?}", self.map[&3428502]);
+
         for (k, v) in self.map.iter_mut() {
-            v.sort_by(|a, b| a.span.start.cmp(&b.span.start).then(a.span.end.cmp(&b.span.end)));
+            v.sort_by(|a, b| a.tid.cmp(&b.tid).then(a.span.start.cmp(&b.span.start)).then(a.span.end.cmp(&b.span.end)));
 
             let mut dest: Vec<Alignment> = Vec::with_capacity(v.len());
             let mut prev = v[0].clone();
             let mut set = HashSet::from([prev.tid]);
 
             for cur in v[1..].iter() {
-                if cur.span.start <= prev.span.end {
+                if cur.overlaps(&prev) {
                     prev.span.end = std::cmp::max(cur.span.end, prev.span.end);
                     prev.depth += cur.depth
                 } else {
@@ -130,6 +145,9 @@ mod test {
         assert_eq!(actual, expected);
     }
 
+    const NAME: &[u8] = b"NAME";
+    const FORWARD: bool = true;
+
     #[test]
     pub fn test_resolve_1() {
         let mut lt = LocusTracker::new();
@@ -139,10 +157,10 @@ mod test {
         let r3 = Range { start: 470, end: 530 };
         let r4 = Range { start: 0, end: 1 };
 
-        lt.add(1, 0, r3);
-        lt.add(1, 0, r2);
-        lt.add(1, 0, r1);
-        lt.add(2, 1, r4);
+        lt.add(NAME, FORWARD, 1, 0, r3);
+        lt.add(NAME, FORWARD, 1, 0, r2);
+        lt.add(NAME, FORWARD, 1, 0, r1);
+        lt.add(NAME, FORWARD, 2, 1, r4);
 
         let report = lt.resolve(0, 1);
         assert_spans(&report, 1, &[Range { start: 0, end: 350 }, r3]);
@@ -152,9 +170,9 @@ mod test {
     #[test]
     fn test_resolve_sorts_disjoint_ranges() {
         let mut lt = LocusTracker::new();
-        lt.add(1, 0, Range { start: 20, end: 30 });
-        lt.add(1, 0, Range { start: 0, end: 10 });
-        lt.add(1, 0, Range { start: 40, end: 50 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 20, end: 30 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 0, end: 10 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 40, end: 50 });
 
         let report = lt.resolve(0, 1);
 
@@ -168,8 +186,8 @@ mod test {
     #[test]
     fn test_resolve_merges_touching_ranges() {
         let mut lt = LocusTracker::new();
-        lt.add(1, 0, Range { start: 10, end: 20 });
-        lt.add(1, 0, Range { start: 0, end: 10 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 10, end: 20 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 0, end: 10 });
 
         let report = lt.resolve(0, 1);
 
@@ -179,9 +197,9 @@ mod test {
     #[test]
     fn test_resolve_merges_nested_ranges() {
         let mut lt = LocusTracker::new();
-        lt.add(1, 0, Range { start: 5, end: 10 });
-        lt.add(1, 0, Range { start: 0, end: 20 });
-        lt.add(1, 0, Range { start: 5, end: 15 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 5, end: 10 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 0, end: 20 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 5, end: 15 });
 
         let report = lt.resolve(0, 1);
 
@@ -191,9 +209,9 @@ mod test {
     #[test]
     fn test_resolve_merges_overlap_chain() {
         let mut lt = LocusTracker::new();
-        lt.add(1, 0, Range { start: 8, end: 15 });
-        lt.add(1, 0, Range { start: 0, end: 5 });
-        lt.add(1, 0, Range { start: 4, end: 10 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 8, end: 15 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 0, end: 5 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 4, end: 10 });
 
         let report = lt.resolve(0, 1);
 
@@ -203,10 +221,10 @@ mod test {
     #[test]
     fn test_resolve_handles_targets_independently() {
         let mut lt = LocusTracker::new();
-        lt.add(1, 0, Range { start: 0, end: 10 });
-        lt.add(2, 1, Range { start: 100, end: 120 });
-        lt.add(1, 0, Range { start: 5, end: 15 });
-        lt.add(2, 1, Range { start: 110, end: 130 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 0, end: 10 });
+        lt.add(NAME, FORWARD, 2, 1, Range { start: 100, end: 120 });
+        lt.add(NAME, FORWARD, 1, 0, Range { start: 5, end: 15 });
+        lt.add(NAME, FORWARD, 2, 1, Range { start: 110, end: 130 });
 
         let report = lt.resolve(0, 1);
 
@@ -217,8 +235,8 @@ mod test {
     #[test]
     fn serializes_report_as_csv() {
         let mut lt = LocusTracker::new();
-        lt.add(0, 0, Range { start: 0, end: 10 });
-        lt.add(0, 1, Range { start: 20, end: 30 });
+        lt.add(NAME, FORWARD, 0, 0, Range { start: 0, end: 10 });
+        lt.add(NAME, FORWARD, 0, 1, Range { start: 20, end: 30 });
         let report = lt.resolve(0, 1);
         let header = test_header();
         let mut writer = csv::Writer::from_writer(Vec::new());
@@ -236,7 +254,7 @@ mod test {
     #[test]
     fn serializes_report_as_tsv() {
         let mut lt = LocusTracker::new();
-        lt.add(42, 0, Range { start: 0, end: 10 });
+        lt.add(NAME, FORWARD, 42, 0, Range { start: 0, end: 10 });
         let report = lt.resolve(0, 1);
         let header = test_header();
         let mut writer = csv::WriterBuilder::new().delimiter(b'\t').from_writer(Vec::new());
