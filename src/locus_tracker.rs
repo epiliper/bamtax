@@ -15,8 +15,7 @@ pub struct Alignment {
 
 impl Alignment {
     pub fn overlaps(&self, other: &Alignment) -> bool {
-        (self.span.start <= other.span.start && self.span.end >= other.span.end)
-            || (self.span.start >= other.span.start && self.span.end <= other.span.end)
+        self.span.start <= other.span.end && other.span.start <= self.span.end
     }
 }
 
