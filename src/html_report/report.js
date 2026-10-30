@@ -59,11 +59,29 @@ function renderSankey(index) {
   const width = 900;
   const height = Math.max(300, dataset.species.length * 32);
   const sourceId = 'sample';
-  const nodes = [{ id: sourceId, name: dataset.name, source: true }]
-    .concat(dataset.species.map(species => ({ id: `taxon-${species.taxId}`, name: species.name, taxId: species.taxId })));
-  const links = dataset.species.map(species => ({ source: sourceId, target: `taxon-${species.taxId}`, value: species.value }));
+  const nodesById = new Map([[sourceId, { id: sourceId, name: dataset.name, source: true }]]);
+  const linksById = new Map();
+  dataset.species.forEach(species => {
+    let source = sourceId;
+    species.lineage.forEach(taxon => {
+      const target = `taxon-${taxon.taxId}`;
+      if (!nodesById.has(target)) {
+        nodesById.set(target, { id: target, name: taxon.name, taxId: taxon.taxId, rank: taxon.rank });
+      }
+      const linkId = `${source}>${target}`;
+      const link = linksById.get(linkId);
+      if (link) {
+        link.value += species.value;
+      } else {
+        linksById.set(linkId, { source, target, value: species.value });
+      }
+      source = target;
+    });
+  });
+  const nodes = [...nodesById.values()];
+  const links = [...linksById.values()];
   const graph = d3.sankey().nodeId(node => node.id).nodeWidth(18).nodePadding(12)
-    .extent([[150, 20], [width - 200, height - 20]])({ nodes, links });
+    .extent([[100, 20], [width - 140, height - 20]])({ nodes, links });
   svg.attr('viewBox', `0 0 ${width} ${height}`);
   svg.append('g').attr('fill', 'none').attr('stroke-opacity', .4).selectAll('path').data(graph.links).join('path')
     .attr('d', d3.sankeyLinkHorizontal()).attr('stroke', '#176b52').attr('stroke-width', link => Math.max(1, link.width))
@@ -71,12 +89,12 @@ function renderSankey(index) {
   const node = svg.append('g').selectAll('g').data(graph.nodes).join('g');
   node.append('rect').attr('x', item => item.x0).attr('y', item => item.y0)
     .attr('width', item => item.x1 - item.x0).attr('height', item => Math.max(1, item.y1 - item.y0))
-    .attr('fill', item => item.source ? '#176b52' : '#efb55f');
-  node.append('text').attr('x', item => item.source ? item.x0 - 8 : item.x1 + 8)
+    .attr('fill', item => item.source ? '#176b52' : item.rank === 'species' ? '#efb55f' : '#75a895');
+  node.append('text').attr('x', item => item.x0 < width / 2 ? item.x1 + 8 : item.x0 - 8)
     .attr('y', item => (item.y0 + item.y1) / 2).attr('dy', '.35em')
-    .attr('text-anchor', item => item.source ? 'end' : 'start')
+    .attr('text-anchor', item => item.x0 < width / 2 ? 'start' : 'end')
     .text(item => item.source ? item.name : `${item.name} (${item.value})`);
-  node.append('title').text(item => item.source ? item.name : `${item.name} (taxid ${item.taxId}): ${item.value}`);
+  node.append('title').text(item => item.source ? item.name : `${item.name} (${item.rank}, taxid ${item.taxId}): ${item.value}`);
 }
 
 selector.addEventListener('change', () => selectDataset(Number(selector.value.slice(6)), true));

@@ -253,18 +253,36 @@ fn render_sankey_data(samples: &[HtmlSample], taxonomy: &Taxonomy) -> String {
             if species_index > 0 {
                 data.push(',');
             }
-            let name = taxonomy
-                .get(species.tax_id)
-                .filter(|taxon| !taxon.name.is_empty())
-                .map(|taxon| taxon.name.as_str())
-                .unwrap_or("Unknown species");
-            let _ = write!(
-                data,
-                "{{\"taxId\":{},\"name\":\"{}\",\"value\":{}}}",
-                species.tax_id,
-                escape_json(name),
-                species.depth
-            );
+            let lineage = taxonomy.lineage(species.tax_id).unwrap_or_default();
+            let _ = write!(data, "{{\"taxId\":{},\"value\":{},\"lineage\":[", species.tax_id, species.depth);
+            if lineage.is_empty() {
+                let name = taxonomy
+                    .get(species.tax_id)
+                    .filter(|taxon| !taxon.name.is_empty())
+                    .map(|taxon| taxon.name.as_str())
+                    .unwrap_or("Unknown species");
+                let _ = write!(
+                    data,
+                    "{{\"taxId\":{},\"name\":\"{}\",\"rank\":\"species\"}}",
+                    species.tax_id,
+                    escape_json(name)
+                );
+            } else {
+                for (lineage_index, taxon) in lineage.iter().enumerate() {
+                    if lineage_index > 0 {
+                        data.push(',');
+                    }
+                    let name = if taxon.name.is_empty() { taxon.tax_id.to_string() } else { taxon.name.clone() };
+                    let _ = write!(
+                        data,
+                        "{{\"taxId\":{},\"name\":\"{}\",\"rank\":\"{}\"}}",
+                        taxon.tax_id,
+                        escape_json(&name),
+                        escape_json(&taxon.rank)
+                    );
+                }
+            }
+            data.push_str("]}");
         }
         data.push_str("]}");
     }
@@ -595,7 +613,10 @@ mod tests {
         assert!(html.contains("id=\"show-sankey\" class=\"active\" aria-pressed=\"true\""));
         assert!(html.contains("id=\"krona-view\" hidden"));
         assert!(html.contains("const sankeyDatasets = [{\"name\":\"one \\u0026 only\""));
-        assert!(html.contains("{\"taxId\":30,\"name\":\"Alpha \\u003cspecies\\u003e\",\"value\":3}"));
+        assert!(html.contains("{\"taxId\":30,\"value\":3,\"lineage\":["));
+        assert!(html.contains("{\"taxId\":10,\"name\":\"Alpha family\",\"rank\":\"family\"}"));
+        assert!(html.contains("{\"taxId\":30,\"name\":\"Alpha \\u003cspecies\\u003e\",\"rank\":\"species\"}"));
+        assert!(html.contains("const linksById = new Map()"));
         assert!(html.contains("d3.sankey()"));
         assert!(html.contains("type: 'bamtax-dataset'"));
         assert!(html.contains("message.type === 'bamtax-dataset-selected'"));
