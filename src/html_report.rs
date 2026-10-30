@@ -13,12 +13,17 @@ use std::process::Command;
 const REPORT_TEMPLATE: &str = include_str!("html_report/report.html");
 const REPORT_STYLE: &str = include_str!("html_report/report.css");
 const REPORT_SCRIPT: &str = include_str!("html_report/report.js");
+const D3_SCRIPT: &str = include_str!("html_report/d3.min.js");
+const D3_SANKEY_SCRIPT: &str = include_str!("html_report/d3-sankey.min.js");
 const KRONA_BRIDGE_SCRIPT: &str = include_str!("html_report/krona_bridge.js");
 
 const STYLE_SLOT: &str = "<!-- BAMTAX:STYLE -->";
 const DATASET_OPTIONS_SLOT: &str = "<!-- BAMTAX:DATASET_OPTIONS -->";
 const TAXON_PANELS_SLOT: &str = "<!-- BAMTAX:TAXON_PANELS -->";
 const KRONA_SLOT: &str = "<!-- BAMTAX:KRONA -->";
+const SANKEY_DATA_SLOT: &str = "<!-- BAMTAX:SANKEY_DATA -->";
+const D3_SLOT: &str = "<!-- BAMTAX:D3 -->";
+const D3_SANKEY_SLOT: &str = "<!-- BAMTAX:D3_SANKEY -->";
 const SCRIPT_SLOT: &str = "<!-- BAMTAX:SCRIPT -->";
 
 pub struct HtmlSample {
@@ -127,20 +132,12 @@ fn generate_krona(
             command.arg("-tax").arg(path);
         }
 
-        let mut aggregate = BTreeMap::<u32, usize>::new();
-        for sample in samples {
-            for species in &sample.species {
-                *aggregate.entry(species.tax_id).or_default() += species.depth;
-            }
-        }
-
-        let aggregate_input = aggregate.into_iter().collect::<Vec<_>>();
-        let datasets = std::iter::once(("All samples", aggregate_input)).chain(samples.iter().map(|sample| {
+        let datasets = samples.iter().map(|sample| {
             (
                 sample.name.as_str(),
                 sample.species.iter().map(|species| (species.tax_id, species.depth)).collect::<Vec<_>>(),
             )
-        }));
+        });
         for (index, (name, species)) in datasets.enumerate() {
             let filename = format!("dataset-{index}.tsv");
             let mut input = String::new();
@@ -209,21 +206,22 @@ fn create_temporary_dir(report_path: &Path) -> Result<PathBuf, String> {
 }
 
 fn render_report(samples: &[HtmlSample], taxonomy: &Taxonomy, krona: Result<&str, &str>) -> String {
-    let mut dataset_options = "          <option value=\"panel-0\">All samples</option>\n".to_owned();
+    let mut dataset_options = String::new();
     for (index, sample) in samples.iter().enumerate() {
         let _ = writeln!(
             dataset_options,
             "          <option value=\"panel-{}\">{}</option>",
-            index + 1,
+            index,
             escape_html(&sample.name)
         );
     }
 
     let mut taxon_panels = String::new();
-    render_panel(&mut taxon_panels, "panel-0", samples.iter(), taxonomy, false);
     for (index, sample) in samples.iter().enumerate() {
-        render_panel(&mut taxon_panels, &format!("panel-{}", index + 1), std::iter::once(sample), taxonomy, true);
+        render_panel(&mut taxon_panels, &format!("panel-{index}"), std::iter::once(sample), taxonomy, index != 0);
     }
+
+    let sankey_data = render_sankey_data(samples, taxonomy);
 
     let krona = match krona {
         Ok(krona_html) => format!(
@@ -238,7 +236,61 @@ fn render_report(samples: &[HtmlSample], taxonomy: &Taxonomy, krona: Result<&str
         .replace(DATASET_OPTIONS_SLOT, &dataset_options)
         .replace(TAXON_PANELS_SLOT, &taxon_panels)
         .replace(KRONA_SLOT, &krona)
+        .replace(SANKEY_DATA_SLOT, &sankey_data)
+        .replace(D3_SLOT, D3_SCRIPT)
+        .replace(D3_SANKEY_SLOT, D3_SANKEY_SCRIPT)
         .replace(SCRIPT_SLOT, REPORT_SCRIPT)
+}
+
+fn render_sankey_data(samples: &[HtmlSample], taxonomy: &Taxonomy) -> String {
+    let mut data = String::from("[");
+    for (sample_index, sample) in samples.iter().enumerate() {
+        if sample_index > 0 {
+            data.push(',');
+        }
+        let _ = write!(data, "{{\"name\":\"{}\",\"species\":[", escape_json(&sample.name));
+        for (species_index, species) in sample.species.iter().enumerate() {
+            if species_index > 0 {
+                data.push(',');
+            }
+            let name = taxonomy
+                .get(species.tax_id)
+                .filter(|taxon| !taxon.name.is_empty())
+                .map(|taxon| taxon.name.as_str())
+                .unwrap_or("Unknown species");
+            let _ = write!(
+                data,
+                "{{\"taxId\":{},\"name\":\"{}\",\"value\":{}}}",
+                species.tax_id,
+                escape_json(name),
+                species.depth
+            );
+        }
+        data.push_str("]}");
+    }
+    data.push(']');
+    data
+}
+
+fn escape_json(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '<' => escaped.push_str("\\u003c"),
+            '>' => escaped.push_str("\\u003e"),
+            '&' => escaped.push_str("\\u0026"),
+            c if c <= '\u{001f}' => {
+                let _ = write!(escaped, "\\u{:04x}", c as u32);
+            }
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 fn render_panel<'a>(
@@ -337,7 +389,7 @@ fn render_node(html: &mut String, node: &TreeNode, depth: usize) {
         return;
     }
 
-    let _ = write!(html, "        <details><summary class=\"row{}\" style=\"--depth:{}\">", species_class, depth);
+    let _ = write!(html, "        <details open><summary class=\"row{}\" style=\"--depth:{}\">", species_class, depth);
     render_cells(html, node, true);
     html.push_str("</summary><div class=\"children\">\n");
     let mut children = node.children.values().collect::<Vec<_>>();
@@ -511,7 +563,7 @@ mod tests {
         ];
         let html = render_report(&samples, &taxonomy(), Err("Krona <unavailable>"));
 
-        assert!(html.contains("<details><summary class=\"row\" style=\"--depth:0\">"));
+        assert!(html.contains("<details open><summary class=\"row\" style=\"--depth:0\">"));
         assert!(html.contains("class=\"row leaf species-call\" style=\"--depth:3\""));
         assert!(html.contains("class=\"taxon-cell\""));
         assert!(html.contains("aria-hidden=\"true\">▸</span>"));
@@ -531,14 +583,20 @@ mod tests {
         assert!(!html.contains("--toolbar-height"));
         assert!(html.contains("id=\"extract-dialog\""));
         assert!(html.contains("id=\"references-dialog\""));
-        assert!(!html.contains("<details open"));
+        assert!(html.contains("<details open"));
         assert!(!html.contains("Georgia"));
         assert!(!html.contains("Alignment-supported species"));
         assert!(html.contains("one &amp; only"));
         assert!(html.contains("Alpha &lt;species&gt;"));
         assert!(html.contains("ref&quot;&lt;a&gt;"));
         assert!(html.contains("Krona &lt;unavailable&gt;"));
-        assert!(html.contains("id=\"panel-2\" hidden"));
+        assert!(html.contains("id=\"panel-1\" hidden"));
+        assert!(!html.contains("All samples"));
+        assert!(html.contains("id=\"show-sankey\" class=\"active\" aria-pressed=\"true\""));
+        assert!(html.contains("id=\"krona-view\" hidden"));
+        assert!(html.contains("const sankeyDatasets = [{\"name\":\"one \\u0026 only\""));
+        assert!(html.contains("{\"taxId\":30,\"name\":\"Alpha \\u003cspecies\\u003e\",\"value\":3}"));
+        assert!(html.contains("d3.sankey()"));
         assert!(html.contains("type: 'bamtax-dataset'"));
         assert!(html.contains("message.type === 'bamtax-dataset-selected'"));
         assert!(html.contains("selectDataset(message.index, false)"));

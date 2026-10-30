@@ -29,8 +29,17 @@
 <!-- BAMTAX:TAXON_PANELS -->
     </section>
     <section class="card krona-card">
-      <div class="section-head"><h2>Krona overview</h2></div>
+      <div class="section-head">
+        <h2>Read distribution</h2>
+        <div class="view-toggle" role="group" aria-label="Visualization">
+          <button type="button" id="show-sankey" class="active" aria-pressed="true">Sankey</button>
+          <button type="button" id="show-krona" aria-pressed="false">Krona</button>
+        </div>
+      </div>
+      <div id="sankey-view"><svg id="sankey" role="img" aria-label="Read distribution by species"></svg></div>
+      <div id="krona-view" hidden>
 <!-- BAMTAX:KRONA -->
+      </div>
     </section>
   </div>
   <dialog id="extract-dialog">
@@ -49,6 +58,13 @@
   </dialog>
 </main>
 <script>
+<!-- BAMTAX:D3 -->
+</script>
+<script>
+<!-- BAMTAX:D3_SANKEY -->
+</script>
+<script>
+const sankeyDatasets = <!-- BAMTAX:SANKEY_DATA -->;
 <!-- BAMTAX:SCRIPT -->
 </script>
 </body>

@@ -66,6 +66,11 @@ button {
 
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); color: var(--accent); }
+.view-toggle { display: flex; }
+.view-toggle button { border-radius: 0; }
+.view-toggle button:first-child { border-radius: 6px 0 0 6px; }
+.view-toggle button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.view-toggle button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 .card {
   background: var(--card);
@@ -171,6 +176,10 @@ iframe {
   margin-top: 12px;
   background: #fff;
 }
+
+#sankey-view { overflow-x: auto; margin-top: 12px; }
+#sankey { display: block; width: 100%; min-width: 680px; height: min(76vh, 100cqw); }
+#sankey text { fill: var(--ink); font: 13px sans-serif; }
 
 dialog {
   width: min(760px, 92vw);

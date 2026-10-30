@@ -23,9 +23,60 @@ function selectDataset(index, notifyKrona) {
 
   selector.value = value;
   panels.forEach(panel => panel.hidden = panel.id !== value);
+  renderSankey(index);
   if (notifyKrona) {
     syncKrona();
   }
+}
+
+const sankeyView = document.getElementById('sankey-view');
+const kronaView = document.getElementById('krona-view');
+const showSankey = document.getElementById('show-sankey');
+const showKrona = document.getElementById('show-krona');
+
+function selectVisualization(sankey) {
+  sankeyView.hidden = !sankey;
+  kronaView.hidden = sankey;
+  showSankey.classList.toggle('active', sankey);
+  showKrona.classList.toggle('active', !sankey);
+  showSankey.setAttribute('aria-pressed', String(sankey));
+  showKrona.setAttribute('aria-pressed', String(!sankey));
+}
+
+showSankey.addEventListener('click', () => selectVisualization(true));
+showKrona.addEventListener('click', () => selectVisualization(false));
+
+function renderSankey(index) {
+  const svg = d3.select('#sankey');
+  svg.selectAll('*').remove();
+  const dataset = sankeyDatasets[index];
+  if (!dataset || dataset.species.length === 0) {
+    svg.attr('viewBox', '0 0 800 120').append('text').attr('x', 400).attr('y', 65)
+      .attr('text-anchor', 'middle').attr('fill', '#65716c').text('No species calls passed the report filters.');
+    return;
+  }
+
+  const width = 900;
+  const height = Math.max(300, dataset.species.length * 32);
+  const sourceId = 'sample';
+  const nodes = [{ id: sourceId, name: dataset.name, source: true }]
+    .concat(dataset.species.map(species => ({ id: `taxon-${species.taxId}`, name: species.name, taxId: species.taxId })));
+  const links = dataset.species.map(species => ({ source: sourceId, target: `taxon-${species.taxId}`, value: species.value }));
+  const graph = d3.sankey().nodeId(node => node.id).nodeWidth(18).nodePadding(12)
+    .extent([[150, 20], [width - 200, height - 20]])({ nodes, links });
+  svg.attr('viewBox', `0 0 ${width} ${height}`);
+  svg.append('g').attr('fill', 'none').attr('stroke-opacity', .4).selectAll('path').data(graph.links).join('path')
+    .attr('d', d3.sankeyLinkHorizontal()).attr('stroke', '#176b52').attr('stroke-width', link => Math.max(1, link.width))
+    .append('title').text(link => `${link.target.name}: ${link.value}`);
+  const node = svg.append('g').selectAll('g').data(graph.nodes).join('g');
+  node.append('rect').attr('x', item => item.x0).attr('y', item => item.y0)
+    .attr('width', item => item.x1 - item.x0).attr('height', item => Math.max(1, item.y1 - item.y0))
+    .attr('fill', item => item.source ? '#176b52' : '#efb55f');
+  node.append('text').attr('x', item => item.source ? item.x0 - 8 : item.x1 + 8)
+    .attr('y', item => (item.y0 + item.y1) / 2).attr('dy', '.35em')
+    .attr('text-anchor', item => item.source ? 'end' : 'start')
+    .text(item => item.source ? item.name : `${item.name} (${item.value})`);
+  node.append('title').text(item => item.source ? item.name : `${item.name} (taxid ${item.taxId}): ${item.value}`);
 }
 
 selector.addEventListener('change', () => selectDataset(Number(selector.value.slice(6)), true));
@@ -46,6 +97,8 @@ window.addEventListener('message', event => {
 if (krona) {
   krona.addEventListener('load', syncKrona);
 }
+
+renderSankey(0);
 
 document.getElementById('expand').addEventListener('click', () => {
   activePanel().querySelectorAll('details').forEach(node => node.open = true);
