@@ -10,17 +10,31 @@
 </head>
 <body>
 <main>
-  <header>
+  <header class="page-header">
     <h1>Detected taxa</h1>
+    <div class="report-legend" aria-label="Yellow indicates a species-level call">
+      <span class="species-swatch" aria-hidden="true"></span>
+      <span>Species-level call</span>
+    </div>
   </header>
   <div class="report-layout">
     <section class="card taxa-card">
       <div class="toolbar report-toolbar">
-        <label>Dataset
-          <select id="dataset" aria-label="Dataset">
+        <div class="filter-controls">
+          <label class="filter-field">Dataset
+            <select id="dataset" aria-label="Dataset">
 <!-- BAMTAX:DATASET_OPTIONS -->
-          </select>
-        </label>
+            </select>
+          </label>
+          <label class="filter-field search-field">Taxa
+            <input type="search" id="taxon-search" autocomplete="off" placeholder="Name or tax ID">
+            <span id="taxon-search-results" class="search-results" hidden></span>
+          </label>
+          <label class="filter-field search-field">References
+            <input type="search" id="reference-search" autocomplete="off" placeholder="Reference name">
+            <span id="reference-search-results" class="search-results" hidden></span>
+          </label>
+        </div>
         <div>
           <button type="button" id="expand">Expand all</button>
           <button type="button" id="collapse">Collapse all</button>
@@ -36,7 +50,12 @@
           <button type="button" id="show-krona" aria-pressed="false">Krona</button>
         </div>
       </div>
-      <div id="sankey-view"><svg id="sankey" role="img" aria-label="Read distribution by species"></svg></div>
+      <p id="sankey-help">Hover, focus, or select an intermediate node for taxon details. Drag open space to pan.</p>
+      <div id="sankey-view">
+        <div id="sankey-sample-name"></div>
+        <svg id="sankey" role="img" aria-label="Read distribution by species" aria-describedby="sankey-help"></svg>
+        <div id="sankey-tooltip" role="tooltip" hidden></div>
+      </div>
       <div id="krona-view" hidden>
 <!-- BAMTAX:KRONA -->
       </div>

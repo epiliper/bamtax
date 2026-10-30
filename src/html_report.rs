@@ -254,8 +254,27 @@ fn render_sankey_data(samples: &[HtmlSample], taxonomy: &Taxonomy) -> String {
                 data.push(',');
             }
             let lineage = taxonomy.lineage(species.tax_id).unwrap_or_default();
+            let family_index = lineage.iter().position(|taxon| taxon.rank == "family");
+            let mut sankey_lineage = Vec::new();
+            let higher_ranks = family_index.map_or(lineage.as_slice(), |index| &lineage[..index]);
+            if let Some(taxon) =
+                higher_ranks.iter().find(|taxon| taxon.parent_tax_id != taxon.tax_id && taxon.rank != "no rank")
+            {
+                sankey_lineage.push(*taxon);
+            }
+            if let Some(index) = family_index {
+                sankey_lineage.push(lineage[index]);
+                if let Some(taxon) = lineage[index + 1..].iter().find(|taxon| taxon.rank == "genus") {
+                    sankey_lineage.push(*taxon);
+                }
+            }
+            if let Some(taxon) = lineage.last()
+                && !sankey_lineage.iter().any(|selected| selected.tax_id == taxon.tax_id)
+            {
+                sankey_lineage.push(*taxon);
+            }
             let _ = write!(data, "{{\"taxId\":{},\"value\":{},\"lineage\":[", species.tax_id, species.depth);
-            if lineage.is_empty() {
+            if sankey_lineage.is_empty() {
                 let name = taxonomy
                     .get(species.tax_id)
                     .filter(|taxon| !taxon.name.is_empty())
@@ -268,7 +287,7 @@ fn render_sankey_data(samples: &[HtmlSample], taxonomy: &Taxonomy) -> String {
                     escape_json(name)
                 );
             } else {
-                for (lineage_index, taxon) in lineage.iter().enumerate() {
+                for (lineage_index, taxon) in sankey_lineage.iter().enumerate() {
                     if lineage_index > 0 {
                         data.push(',');
                     }
@@ -420,13 +439,18 @@ fn render_node(html: &mut String, node: &TreeNode, depth: usize) {
 
 fn render_cells(html: &mut String, node: &TreeNode, expandable: bool) {
     let tax_id = node.tax_id.map(|id| format!("taxid {id}")).unwrap_or_else(|| "synthetic group".to_owned());
+    let tax_id_value = node.tax_id.map(|id| id.to_string()).unwrap_or_default();
     let references = node.references.iter().cloned().collect::<Vec<_>>().join("\n");
     let command = extract_command(&node.extract_calls);
     let toggle = if expandable { "<span class=\"toggle\" aria-hidden=\"true\">▸</span>" } else { "" };
     let _ = write!(
         html,
-        "<span class=\"taxon-cell\">{}<span class=\"taxon\">{}</span><br><span class=\"meta\">{}</span></span><span>{}</span><span>{}</span><span>{}</span><span>{}</span><button type=\"button\" class=\"references-button\" data-taxon=\"{}\" data-references=\"{}\" aria-label=\"Show {} references for {}\">{}</button><button type=\"button\" class=\"extract-button\" data-command=\"{}\" title=\"Copy command for {} species call{}\">Extract</button>",
+        "<span class=\"taxon-cell\">{}<span class=\"taxon search-taxon\" data-tax-id=\"{}\" data-taxon=\"{}\" data-rank=\"{}\" data-references=\"{}\">{}</span><br><span class=\"meta\">{}</span></span><span>{}</span><span>{}</span><span>{}</span><span>{}</span><button type=\"button\" class=\"references-button\" data-taxon=\"{}\" data-references=\"{}\" aria-label=\"Show {} references for {}\">{}</button><button type=\"button\" class=\"extract-button\" data-command=\"{}\" title=\"Copy command for {} species call{}\">Extract</button>",
         toggle,
+        tax_id_value,
+        escape_html(&node.name),
+        escape_html(&node.rank),
+        escape_html(&references),
         escape_html(&node.name),
         tax_id,
         escape_html(&node.rank),
@@ -601,6 +625,10 @@ mod tests {
         assert!(!html.contains("--toolbar-height"));
         assert!(html.contains("id=\"extract-dialog\""));
         assert!(html.contains("id=\"references-dialog\""));
+        assert!(html.contains("id=\"taxon-search\""));
+        assert!(html.contains("id=\"reference-search\""));
+        assert!(!html.contains("id=\"taxon-dialog\""));
+        assert!(html.contains("class=\"taxon search-taxon\" data-tax-id=\"30\""));
         assert!(html.contains("<details open"));
         assert!(!html.contains("Georgia"));
         assert!(!html.contains("Alignment-supported species"));
@@ -614,14 +642,22 @@ mod tests {
         assert!(html.contains("id=\"krona-view\" hidden"));
         assert!(html.contains("const sankeyDatasets = [{\"name\":\"one \\u0026 only\""));
         assert!(html.contains("{\"taxId\":30,\"value\":3,\"lineage\":["));
+        assert!(html.contains("{\"taxId\":2,\"name\":\"Bacteria\",\"rank\":\"superkingdom\"}"));
         assert!(html.contains("{\"taxId\":10,\"name\":\"Alpha family\",\"rank\":\"family\"}"));
+        assert!(html.contains("{\"taxId\":20,\"name\":\"Alpha genus\",\"rank\":\"genus\"}"));
         assert!(html.contains("{\"taxId\":30,\"name\":\"Alpha \\u003cspecies\\u003e\",\"rank\":\"species\"}"));
+        assert!(!html.contains("{\"taxId\":11,\"name\":\"Alpha group\""));
         assert!(html.contains("const linksById = new Map()"));
         assert!(html.contains("d3.sankey()"));
+        assert!(html.contains("id=\"sankey-tooltip\" role=\"tooltip\""));
+        assert!(html.contains("id=\"sankey-sample-name\""));
+        assert!(html.contains("class', 'species-leader'"));
+        assert!(html.contains("new ResizeObserver"));
         assert!(html.contains("type: 'bamtax-dataset'"));
         assert!(html.contains("message.type === 'bamtax-dataset-selected'"));
         assert!(html.contains("selectDataset(message.index, false)"));
-        assert!(html.contains("--species: #fff0d8"));
+        assert!(html.contains("--species: #fff4c7"));
+        assert!(html.contains("Yellow indicates a species-level call"));
         assert!(!html.contains("<!-- BAMTAX:"));
     }
 
