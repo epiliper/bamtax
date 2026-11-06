@@ -260,7 +260,6 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         let mut handle_buckets = |buckets: Vec<ReadBucket>| -> Result<(), Error> {
             if let Some((bucket, call_taxid)) = cluster_read_buckets(buckets, k2taxon.as_ref())? {
                 let reads = [Some(bucket.rec), bucket.mate];
-                eprintln!("{}", reads.len());
 
                 if let Some(species) = taxonomy.species(call_taxid) {
                     for rec in reads.iter().flatten() {
@@ -292,7 +291,6 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
             }
 
             let alignment = ClusterAlignment::from_raw(&rec)?;
-            eprintln!("{} {}", alignment.cover.frac_aligned(), alignment.cover.frac_matched());
 
             if alignment.cover.frac_aligned() < args.min_frac_read_aligned
                 || alignment.cover.frac_matched() < args.min_frac_read_matched

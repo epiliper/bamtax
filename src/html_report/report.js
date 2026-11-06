@@ -64,32 +64,56 @@ function renderSankey(index) {
     return;
   }
 
-  const maxDepth = Math.max(...dataset.species.map(species => species.lineage.length), 1);
-  const shortestLineage = Math.min(...dataset.species.map(species => species.lineage.length));
-  let branchDepth = 0;
-  while (
-    branchDepth < shortestLineage &&
-    dataset.species.every(species => species.lineage[branchDepth].taxId === dataset.species[0].lineage[branchDepth].taxId)
-  ) {
-    branchDepth += 1;
-  }
-  branchDepth = Math.min(branchDepth, Math.max(0, shortestLineage - 1));
-  const branchIds = [];
-  dataset.species.forEach(species => {
-    const branchId = species.lineage[branchDepth]?.taxId;
-    if (branchId !== undefined && !branchIds.includes(branchId)) {
-      branchIds.push(branchId);
-    }
-  });
-  const branchGap = 18;
+  const { graph, width, height, labelX } = layoutSankey(dataset, Math.max(0, sankeyView.clientWidth - 2));
+  svg.attr('viewBox', `0 0 ${width} ${height}`).attr('width', width).attr('height', height);
+  svg.append('g').attr('fill', 'none').attr('stroke-opacity', .26).selectAll('path').data(graph.links).join('path')
+    .attr('d', d3.sankeyLinkHorizontal()).attr('stroke', 'var(--sankey-link)').attr('stroke-width', link => Math.max(1, link.width))
+    .append('title').text(link => `${link.target.name}: ${link.value}`);
+  const speciesNodes = graph.nodes.filter(item => item.species).sort((a, b) => nodeCenter(a) - nodeCenter(b));
+  const labelPositions = spreadLabels(speciesNodes.map(nodeCenter), 20, height - 20, 18);
+  svg.append('g').selectAll('path').data(speciesNodes).join('path').attr('class', 'species-leader')
+    .attr('d', (item, itemIndex) => {
+      const startY = nodeCenter(item);
+      const endY = labelPositions[itemIndex];
+      const elbowX = item.x1 + 12;
+      return `M${item.x1},${startY}H${elbowX}V${endY}H${labelX - 7}`;
+    });
+  const node = svg.append('g').selectAll('g').data(graph.nodes).join('g')
+    .attr('class', item => `node${!item.species ? ' interactive-node' : ''}`)
+    .attr('tabindex', item => item.species ? null : 0)
+    .attr('role', 'img')
+    .attr('aria-label', nodeDescription);
+  node.append('rect').attr('x', item => item.x0).attr('y', item => item.y0)
+    .attr('width', item => item.x1 - item.x0).attr('height', item => Math.max(1, item.y1 - item.y0))
+    .attr('fill', item => item.species ? 'var(--sankey-species)' : 'var(--sankey-node)');
+  const groupLabels = node.filter(item => !item.species).append('text')
+    .attr('x', item => item.x0 - 10).attr('y', item => nodeCenter(item) - 3).attr('text-anchor', 'end');
+  groupLabels.append('tspan').text(item => item.name);
+  groupLabels.append('tspan').attr('x', item => item.x0 - 10).attr('dy', '1.2em').text(item => item.value);
+  node.filter(item => item.species).append('title').text(nodeDescription);
+  node.filter(item => !item.species)
+    .on('mouseenter focus', showSankeyTooltip)
+    .on('mousemove', moveSankeyTooltip)
+    .on('mouseleave blur', hideTransientSankeyTooltip)
+    .on('click', toggleSankeyTooltip);
+  svg.append('g').selectAll('text').data(speciesNodes).join('text')
+    .attr('x', labelX).attr('y', (_, itemIndex) => labelPositions[itemIndex]).attr('dy', '.35em')
+    .text(item => `${item.name} (${item.value})`);
+  svg.on('click', hideSankeyTooltip);
+}
+
+function layoutSankey(dataset, availableWidth) {
+  const groupOrder = [2, 2157, 2759, 10239, 0];
+  const branchIds = [...new Set(dataset.species.map(species => species.lineage[0].taxId))]
+    .sort((a, b) => groupOrder.indexOf(a) - groupOrder.indexOf(b));
+  const branchGap = 28;
   const branchExtra = Math.max(0, branchIds.length - 1) * branchGap;
-  const availableWidth = Math.max(0, sankeyView.clientWidth - 2);
   const longestLabel = Math.max(...dataset.species.map(species => {
     const taxon = species.lineage[species.lineage.length - 1];
     return `${taxon.name} (${species.value})`.length;
   }));
   const labelWidth = Math.min(420, Math.max(210, longestLabel * 7 + 20));
-  const width = Math.max(680, availableWidth, maxDepth * 125 + labelWidth + 90);
+  const width = Math.max(680, availableWidth, 2 * 125 + labelWidth + 140);
   const height = Math.max(300, dataset.species.length * 34 + 40 + branchExtra);
   const labelX = width - labelWidth;
   const plotRight = labelX - 32;
@@ -97,9 +121,9 @@ function renderSankey(index) {
   const linksById = new Map();
   dataset.species.forEach(species => {
     let source = null;
-    const branchIndex = Math.max(0, branchIds.indexOf(species.lineage[branchDepth]?.taxId));
+    const branchIndex = branchIds.indexOf(species.lineage[0].taxId);
     species.lineage.forEach((taxon, lineageIndex) => {
-      const target = `taxon-${taxon.taxId}`;
+      const target = `${lineageIndex === 0 ? 'group' : 'taxon'}-${taxon.taxId}`;
       if (!nodesById.has(target)) {
         nodesById.set(target, {
           id: target,
@@ -129,46 +153,21 @@ function renderSankey(index) {
   const nodes = [...nodesById.values()];
   const links = [...linksById.values()];
   const sankey = d3.sankey().nodeId(node => node.id).nodeWidth(24).nodePadding(18)
-    .nodeSort((a, b) => (a.branchIndex ?? -1) - (b.branchIndex ?? -1) || a.name.localeCompare(b.name))
-    .extent([[100, 20], [plotRight, height - 20 - branchExtra]]);
+    .nodeSort((a, b) => a.branchIndex - b.branchIndex || b.fixedValue - a.fixedValue || a.name.localeCompare(b.name) || a.taxId - b.taxId)
+    .extent([[140, 20], [plotRight, height - 20 - branchExtra]]);
   const graph = sankey({ nodes, links });
   graph.nodes.forEach(item => {
     const offset = item.branchIndex * branchGap;
     item.y0 += offset;
     item.y1 += offset;
   });
+  // D3's relaxation can leave attachment order out of sync with final node positions.
+  graph.nodes.forEach(item => {
+    item.sourceLinks.sort((a, b) => a.target.y0 - b.target.y0 || a.index - b.index);
+    item.targetLinks.sort((a, b) => a.source.y0 - b.source.y0 || a.index - b.index);
+  });
   sankey.update(graph);
-  svg.attr('viewBox', `0 0 ${width} ${height}`).attr('width', width).attr('height', height);
-  svg.append('g').attr('fill', 'none').attr('stroke-opacity', .26).selectAll('path').data(graph.links).join('path')
-    .attr('d', d3.sankeyLinkHorizontal()).attr('stroke', 'var(--sankey-link)').attr('stroke-width', link => Math.max(1, link.width))
-    .append('title').text(link => `${link.target.name}: ${link.value}`);
-  const speciesNodes = graph.nodes.filter(item => item.species).sort((a, b) => nodeCenter(a) - nodeCenter(b));
-  const labelPositions = spreadLabels(speciesNodes.map(nodeCenter), 20, height - 20, 18);
-  svg.append('g').selectAll('path').data(speciesNodes).join('path').attr('class', 'species-leader')
-    .attr('d', (item, itemIndex) => {
-      const startY = nodeCenter(item);
-      const endY = labelPositions[itemIndex];
-      const elbowX = item.x1 + 12;
-      return `M${item.x1},${startY}H${elbowX}V${endY}H${labelX - 7}`;
-    });
-  const node = svg.append('g').selectAll('g').data(graph.nodes).join('g')
-    .attr('class', item => `node${!item.species ? ' interactive-node' : ''}`)
-    .attr('tabindex', item => item.species ? null : 0)
-    .attr('role', 'img')
-    .attr('aria-label', nodeDescription);
-  node.append('rect').attr('x', item => item.x0).attr('y', item => item.y0)
-    .attr('width', item => item.x1 - item.x0).attr('height', item => Math.max(1, item.y1 - item.y0))
-    .attr('fill', item => item.species ? 'var(--sankey-species)' : 'var(--sankey-node)');
-  node.filter(item => item.species).append('title').text(nodeDescription);
-  node.filter(item => !item.species)
-    .on('mouseenter focus', showSankeyTooltip)
-    .on('mousemove', moveSankeyTooltip)
-    .on('mouseleave blur', hideTransientSankeyTooltip)
-    .on('click', toggleSankeyTooltip);
-  svg.append('g').selectAll('text').data(speciesNodes).join('text')
-    .attr('x', labelX).attr('y', (_, itemIndex) => labelPositions[itemIndex]).attr('dy', '.35em')
-    .text(item => `${item.name} (${item.value})`);
-  svg.on('click', hideSankeyTooltip);
+  return { graph, width, height, labelX };
 }
 
 function nodeCenter(node) {

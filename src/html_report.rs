@@ -252,53 +252,28 @@ fn render_sankey_data(samples: &[HtmlSample], taxonomy: &Taxonomy) -> String {
                 data.push(',');
             }
             let lineage = taxonomy.lineage(species.tax_id).unwrap_or_default();
-            let family_index = lineage.iter().position(|taxon| taxon.rank == "family");
-            let mut sankey_lineage = Vec::new();
-            let higher_ranks = family_index.map_or(lineage.as_slice(), |index| &lineage[..index]);
-            if let Some(taxon) =
-                higher_ranks.iter().find(|taxon| taxon.parent_tax_id != taxon.tax_id && taxon.rank != "no rank")
-            {
-                sankey_lineage.push(*taxon);
-            }
-            if let Some(index) = family_index {
-                sankey_lineage.push(lineage[index]);
-                if let Some(taxon) = lineage[index + 1..].iter().find(|taxon| taxon.rank == "genus") {
-                    sankey_lineage.push(*taxon);
-                }
-            }
-            if let Some(taxon) = lineage.last()
-                && !sankey_lineage.iter().any(|selected| selected.tax_id == taxon.tax_id)
-            {
-                sankey_lineage.push(*taxon);
-            }
+            // Use stable NCBI IDs rather than rank names, which vary between taxonomy releases.
+            let (group_id, group_name) = lineage
+                .iter()
+                .find_map(|taxon| match taxon.tax_id {
+                    2 => Some((2, "Bacteria")),
+                    2157 => Some((2157, "Archaea")),
+                    2759 => Some((2759, "Eukaryota")),
+                    10239 => Some((10239, "Viruses")),
+                    _ => None,
+                })
+                .unwrap_or((0, "Unclassified"));
             let _ = write!(data, "{{\"taxId\":{},\"value\":{},\"lineage\":[", species.tax_id, species.depth);
-            if sankey_lineage.is_empty() {
-                let name = taxonomy
-                    .get(species.tax_id)
-                    .filter(|taxon| !taxon.name.is_empty())
-                    .map(|taxon| taxon.name.as_str())
-                    .unwrap_or("Unknown species");
-                let _ = write!(
-                    data,
-                    "{{\"taxId\":{},\"name\":\"{}\",\"rank\":\"species\"}}",
-                    species.tax_id,
-                    escape_json(name)
-                );
-            } else {
-                for (lineage_index, taxon) in sankey_lineage.iter().enumerate() {
-                    if lineage_index > 0 {
-                        data.push(',');
-                    }
-                    let name = if taxon.name.is_empty() { taxon.tax_id.to_string() } else { taxon.name.clone() };
-                    let _ = write!(
-                        data,
-                        "{{\"taxId\":{},\"name\":\"{}\",\"rank\":\"{}\"}}",
-                        taxon.tax_id,
-                        escape_json(&name),
-                        escape_json(&taxon.rank)
-                    );
-                }
-            }
+            let taxon = taxonomy.get(species.tax_id);
+            let name = taxon.filter(|taxon| !taxon.name.is_empty()).map(|taxon| taxon.name.as_str());
+            let fallback_name = species.tax_id.to_string();
+            let _ = write!(
+                data,
+                "{{\"taxId\":{group_id},\"name\":\"{group_name}\",\"rank\":\"group\"}},{{\"taxId\":{},\"name\":\"{}\",\"rank\":\"{}\"}}",
+                species.tax_id,
+                escape_json(name.unwrap_or(&fallback_name)),
+                escape_json(taxon.map_or("species", |taxon| taxon.rank.as_str()))
+            );
             data.push_str("]}");
         }
         data.push_str("]}");
@@ -536,7 +511,11 @@ mod tests {
     fn taxonomy() -> Taxonomy {
         let nodes = concat!(
             "1\t|\t1\t|\tno rank\t|\tignored\t|\n",
-            "2\t|\t1\t|\tsuperkingdom\t|\tignored\t|\n",
+            "131567\t|\t1\t|\tcellular root\t|\tignored\t|\n",
+            "2\t|\t131567\t|\tsuperkingdom\t|\tignored\t|\n",
+            "2157\t|\t131567\t|\tdomain\t|\tignored\t|\n",
+            "2759\t|\t131567\t|\tdomain\t|\tignored\t|\n",
+            "10239\t|\t1\t|\tacellular root\t|\tignored\t|\n",
             "10\t|\t2\t|\tfamily\t|\tignored\t|\n",
             "11\t|\t10\t|\tno rank\t|\tignored\t|\n",
             "20\t|\t11\t|\tgenus\t|\tignored\t|\n",
@@ -544,10 +523,18 @@ mod tests {
             "40\t|\t2\t|\tfamily\t|\tignored\t|\n",
             "50\t|\t40\t|\tspecies\t|\tignored\t|\n",
             "60\t|\t2\t|\tspecies\t|\tignored\t|\n",
+            "70\t|\t2157\t|\tspecies\t|\tignored\t|\n",
+            "80\t|\t2759\t|\tspecies\t|\tignored\t|\n",
+            "90\t|\t10239\t|\tspecies\t|\tignored\t|\n",
+            "100\t|\t131567\t|\tspecies\t|\tignored\t|\n",
         );
         let names = concat!(
             "1\t|\troot\t|\t\t|\tscientific name\t|\n",
             "2\t|\tBacteria\t|\t\t|\tscientific name\t|\n",
+            "131567\t|\tcellular organisms\t|\t\t|\tscientific name\t|\n",
+            "2157\t|\tArchaea\t|\t\t|\tscientific name\t|\n",
+            "2759\t|\tEukaryota\t|\t\t|\tscientific name\t|\n",
+            "10239\t|\tViruses\t|\t\t|\tscientific name\t|\n",
             "10\t|\tAlpha family\t|\t\t|\tscientific name\t|\n",
             "11\t|\tAlpha group\t|\t\t|\tscientific name\t|\n",
             "20\t|\tAlpha genus\t|\t\t|\tscientific name\t|\n",
@@ -555,6 +542,10 @@ mod tests {
             "40\t|\tBeta family\t|\t\t|\tscientific name\t|\n",
             "50\t|\tBeta species\t|\t\t|\tscientific name\t|\n",
             "60\t|\tOrphan species\t|\t\t|\tscientific name\t|\n",
+            "70\t|\tArchaeal species\t|\t\t|\tscientific name\t|\n",
+            "80\t|\tEukaryotic species\t|\t\t|\tscientific name\t|\n",
+            "90\t|\tViral species\t|\t\t|\tscientific name\t|\n",
+            "100\t|\tUnclassified species\t|\t\t|\tscientific name\t|\n",
         );
         Taxonomy::from_readers(Cursor::new(nodes), Cursor::new(names)).unwrap()
     }
@@ -640,9 +631,9 @@ mod tests {
         assert!(html.contains("id=\"krona-view\" hidden"));
         assert!(html.contains("const sankeyDatasets = [{\"name\":\"one \\u0026 only\""));
         assert!(html.contains("{\"taxId\":30,\"value\":3,\"lineage\":["));
-        assert!(html.contains("{\"taxId\":2,\"name\":\"Bacteria\",\"rank\":\"superkingdom\"}"));
-        assert!(html.contains("{\"taxId\":10,\"name\":\"Alpha family\",\"rank\":\"family\"}"));
-        assert!(html.contains("{\"taxId\":20,\"name\":\"Alpha genus\",\"rank\":\"genus\"}"));
+        assert!(html.contains("{\"taxId\":2,\"name\":\"Bacteria\",\"rank\":\"group\"}"));
+        assert!(!html.contains("{\"taxId\":10,\"name\":\"Alpha family\",\"rank\":\"family\"}"));
+        assert!(!html.contains("{\"taxId\":20,\"name\":\"Alpha genus\",\"rank\":\"genus\"}"));
         assert!(html.contains("{\"taxId\":30,\"name\":\"Alpha \\u003cspecies\\u003e\",\"rank\":\"species\"}"));
         assert!(!html.contains("{\"taxId\":11,\"name\":\"Alpha group\""));
         assert!(html.contains("const linksById = new Map()"));
@@ -657,6 +648,31 @@ mod tests {
         assert!(html.contains("--species: #fff4c7"));
         assert!(html.contains("Yellow indicates a species-level call"));
         assert!(!html.contains("<!-- BAMTAX:"));
+    }
+
+    #[test]
+    fn sankey_uses_high_level_groups_and_calls_only() {
+        for (tax_id, group_id, group_name, call_name) in [
+            (30, 2, "Bacteria", "Alpha \\u003cspecies\\u003e"),
+            (60, 2, "Bacteria", "Orphan species"),
+            (70, 2157, "Archaea", "Archaeal species"),
+            (80, 2759, "Eukaryota", "Eukaryotic species"),
+            (90, 10239, "Viruses", "Viral species"),
+            (100, 0, "Unclassified", "Unclassified species"),
+            (999, 0, "Unclassified", "999"),
+        ] {
+            let data = render_sankey_data(&[sample("one", vec![species(tax_id, 7, 1, "ref")])], &taxonomy());
+            assert_eq!(
+                data,
+                format!(
+                    "[{{\"name\":\"one\",\"species\":[{{\"taxId\":{tax_id},\"value\":7,\"lineage\":[{{\"taxId\":{group_id},\"name\":\"{group_name}\",\"rank\":\"group\"}},{{\"taxId\":{tax_id},\"name\":\"{call_name}\",\"rank\":\"species\"}}]}}]}}]"
+                )
+            );
+        }
+        assert_eq!(
+            render_sankey_data(&[sample("empty", vec![])], &taxonomy()),
+            "[{\"name\":\"empty\",\"species\":[]}]"
+        );
     }
 
     #[test]
