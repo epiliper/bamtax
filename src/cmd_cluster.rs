@@ -2,7 +2,6 @@
 use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Error, bail};
 use clap::Parser;
-use rust_htslib::bam::{Header, HeaderView, Read, Reader as BamReader, Record, Writer as BamWriter, record::Aux};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::Path;
@@ -10,6 +9,7 @@ use std::path::Path;
 use crate::html_report::{HtmlSample, write_html_report};
 use crate::k2_taxonomy::K2Taxonomy;
 use crate::locus_tracker::LocusTracker;
+use crate::sam_bam_reader::{RawRecord, SamBamReader};
 use crate::sam_merge_buffer::{ClusterAlignment, ReadBucket, SamMergeBuffer};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,19 +119,17 @@ pub fn taxid_from_id_str(id: &str) -> Result<u32, Error> {
         meta
     } else if let Some((_header, meta)) = id.split_once("kraken:taxid|") {
         meta
+        // kma db format
+    } else if let Some((taxid, _meta)) = id.split_once("|")
+        && let Ok(_) = taxid.parse::<i32>()
+    {
+        taxid
     } else {
         bail!("No taxid pattern in id {}", id);
     };
 
     let digits = split.bytes().take_while(|b| b.is_ascii_digit()).collect::<Vec<u8>>();
     std::str::from_utf8(digits.as_slice()).expect("invalid taxid string").parse::<u32>().map_err(|e| anyhow::anyhow!(e))
-}
-
-#[inline(always)]
-pub fn record_get_taxid(header: &HeaderView, rec: &Record) -> Result<u32, Error> {
-    let tname = std::str::from_utf8(tid2name(header, rec.tid())?)?;
-
-    taxid_from_id_str(tname).with_context(|| format!("Header: {tname}"))
 }
 
 pub fn is_broken_pipe(error: &Error) -> bool {
@@ -146,21 +144,8 @@ pub fn is_broken_pipe(error: &Error) -> bool {
     })
 }
 
-#[inline(always)]
-pub fn tid2name(header: &HeaderView, tid: i32) -> Result<&[u8], Error> {
-    Ok(header.tid2name(u32::try_from(tid)?))
-}
-
-const READ_SRC_TAG: &str = "RG";
-
-#[inline(always)]
-pub fn get_read_src(record: &Record) -> &str {
-    match record.aux(READ_SRC_TAG.as_bytes()) {
-        Ok(Aux::String(str)) => str,
-        _ => "0",
-        // Ok(_) => "0",
-        // _ => panic!("Read source tag {READ_SRC_TAG} overwritten!"),
-    }
+pub fn tid2name<'a>(reader: &'a SamBamReader, tid: usize) -> Option<&'a str> {
+    reader.tid_to_name(tid)
 }
 
 /// Given read pairs from a different alignment files (one file = one bucket), tie-break alignments
@@ -260,29 +245,22 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
             None
         };
 
-        let mut reader = BamReader::from_path(&bam).expect("create reader");
-        reader.set_threads(4).context("set reader threads")?;
-        let header = reader.header();
+        let mut reader = SamBamReader::open(Path::new(&bam)).context("open input file")?;
         let mut seq_len = 0;
 
         let mut failed_read_writer = std::io::BufWriter::new(
             std::fs::File::create(format!("{basename}_failed_reads.txt")).context("create failed reads file")?,
         );
-        // let output_read_path = format!("{basename}_bamtax.bam");
-        // let mut read_writer =
-        // BamWriter::from_path(&output_read_path, &Header::from_template(header), rust_htslib::bam::Format::Bam)?;
 
-        let mut rec = Record::new();
         let mut i = 0;
         let mut n_passed = 0;
-
-        // copy header for now.
-        let header = header.clone();
+        let mut failed_tids: Vec<(Vec<u8>, i64)> = Vec::new();
 
         /////////////// BEGIN CLOSURE
         let mut handle_buckets = |buckets: Vec<ReadBucket>| -> Result<(), Error> {
             if let Some((bucket, call_taxid)) = cluster_read_buckets(buckets, k2taxon.as_ref())? {
                 let reads = [Some(bucket.rec), bucket.mate];
+                eprintln!("{}", reads.len());
 
                 if let Some(species) = taxonomy.species(call_taxid) {
                     for rec in reads.iter().flatten() {
@@ -290,16 +268,12 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
 
                         seq_len += rec.seq_len;
                         n_passed += 1;
-                        // read_writer.write(rec)?;
                     }
                 } else {
                     eprintln!("Warning: failed to find species for taxon id {}. Skipping...", call_taxid);
 
                     for rec in reads.iter().flatten() {
-                        failed_read_writer.write(&rec.name)?;
-                        failed_read_writer.write(b"\t")?;
-                        failed_read_writer.write(tid2name(&header, rec.tid)?)?;
-                        failed_read_writer.write(b"\n")?;
+                        failed_tids.push((rec.name.clone(), rec.tid));
                     }
                 }
             }
@@ -308,16 +282,17 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         };
         /////////////// END CLOSURE
 
+        let mut rec = RawRecord::default();
         while let Some(result) = reader.read(&mut rec) {
             result.context("read record")?;
             i += 1;
-
             if rec.is_unmapped() || rec.is_secondary() || rec.is_supplementary() {
+                eprintln!("SKIPPING");
                 continue;
             }
 
-            let alignment =
-                ClusterAlignment::from_read_and_source(&rec, record_get_taxid(&header, &rec)?, get_read_src(&rec))?;
+            let alignment = ClusterAlignment::from_raw(&rec)?;
+            eprintln!("{} {}", alignment.cover.frac_aligned(), alignment.cover.frac_matched());
 
             if alignment.cover.frac_aligned() < args.min_frac_read_aligned
                 || alignment.cover.frac_matched() < args.min_frac_read_matched
@@ -339,6 +314,16 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
             i += remainder.len();
             handle_buckets(remainder)?;
         }
+        drop(handle_buckets);
+
+        // Write failed reads now that the mutable borrow on reader is released
+        for (name, tid) in &failed_tids {
+            failed_read_writer.write_all(name)?;
+            failed_read_writer.write_all(b"\t")?;
+            let tname = reader.tid_to_name(*tid as usize).unwrap_or("unknown");
+            failed_read_writer.write_all(tname.as_bytes())?;
+            failed_read_writer.write_all(b"\n")?;
+        }
 
         failed_read_writer.flush().expect("writer flush");
 
@@ -346,10 +331,13 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
         let krona_path = basename.to_string() + ".krona";
         let mut krona_writer = BufWriter::new(File::create(&krona_path)?);
 
+        let name_lookup = |tid: u64| reader.tid_to_name(tid as usize).unwrap_or("unknown").to_string();
+
         if n_passed > 0 {
             let report = lt.resolve(args.min_loci_per_call, seq_len / n_passed);
+            eprintln!("Writing report with {} items...", report.alns.len());
 
-            if let Err(error) = report.serialize(&mut writer, &header, basename, Some(&taxonomy))
+            if let Err(error) = report.serialize(&mut writer, &name_lookup, basename, Some(&taxonomy))
                 && to_stdout
                 && !is_broken_pipe(&error)
             {
@@ -359,7 +347,7 @@ pub fn cluster_main(args: ClusterArgs) -> Result<(), Error> {
             report.serialize_krona(&mut krona_writer)?;
 
             if html_report.is_some() {
-                html_samples.push(HtmlSample::from_report(basename, &bam, &report, &header));
+                html_samples.push(HtmlSample::from_report(basename, &bam, &report, &name_lookup));
             }
         } else if html_report.is_some() {
             html_samples.push(HtmlSample::empty(basename, &bam));

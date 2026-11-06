@@ -1,7 +1,6 @@
 use crate::locus_tracker::AlignmentReport;
 use crate::taxonomy::Taxonomy;
 use anyhow::{Context, Result};
-use rust_htslib::bam::HeaderView;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
@@ -59,13 +58,12 @@ struct TreeNode {
 }
 
 impl HtmlSample {
-    pub fn from_report(name: &str, source: &str, report: &AlignmentReport, header: &HeaderView) -> Self {
+    pub fn from_report(name: &str, source: &str, report: &AlignmentReport, tid_to_name: &dyn Fn(u64) -> String) -> Self {
         let mut species = report
             .alns
             .iter()
             .map(|(tax_id, (alignments, tids))| {
-                let mut references: Vec<_> =
-                    tids.iter().map(|tid| String::from_utf8_lossy(header.tid2name(*tid as u32)).into_owned()).collect();
+                let mut references: Vec<_> = tids.iter().map(|tid| tid_to_name(*tid)).collect();
                 references.sort();
 
                 SpeciesSummary {

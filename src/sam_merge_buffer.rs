@@ -1,9 +1,9 @@
 use crate::{
     cmd_cluster::Range,
-    filter_read::{ReadCover, filter_read},
+    filter_read::{ReadCover, filter_read_raw},
+    sam_bam_reader::RawRecord,
 };
 use anyhow::Error;
-use rust_htslib::bam::{ext::BamRecordExtensions, record::Record};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -13,9 +13,9 @@ pub struct ReadHash {
 }
 
 impl ReadHash {
-    pub fn from_read_and_source(rec: &Record, source: &str) -> Self {
+    pub fn from_read_and_source(rec: &RawRecord, source: &str) -> Self {
         let mut hash = std::hash::DefaultHasher::new();
-        rec.qname().hash(&mut hash);
+        rec.qname.hash(&mut hash);
         let name_hash = hash.finish();
 
         let mut hash = std::hash::DefaultHasher::new();
@@ -34,25 +34,24 @@ pub struct ClusterAlignment {
     pub seq_len: usize,
     pub name: Vec<u8>,
     pub forward: bool,
-    pub tid: i32,
+    pub tid: i64,
     pub taxid: u32,
     pub map_interval: Range,
     pub cover: ReadCover,
 }
 
 impl ClusterAlignment {
-    pub fn from_read_and_source(read: &Record, taxid: u32, source: &str) -> Result<Self, Error> {
-        let hash = ReadHash::from_read_and_source(read, source);
-        let map_interval = Range { start: read.pos(), end: read.reference_end() - 1 };
-        let cover = filter_read(read)?;
-        let seq_len = read.seq_len();
+    pub fn from_raw(read: &RawRecord) -> Result<Self, Error> {
+        let hash = ReadHash::from_read_and_source(read, &read.rg_tag);
+        let map_interval = Range { start: read.pos, end: read.ref_end - 1 };
+        let cover = filter_read_raw(read)?;
         Ok(Self {
             hash,
-            name: read.qname().to_vec(),
+            name: read.qname.clone(),
             forward: !read.is_reverse(),
-            tid: read.tid(),
-            seq_len,
-            taxid,
+            tid: read.tid,
+            seq_len: read.seq_len,
+            taxid: read.taxid,
             cover,
             map_interval,
         })

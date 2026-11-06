@@ -16,6 +16,7 @@ mod html_report;
 mod k2_taxonomy;
 mod k2_utils;
 mod locus_tracker;
+mod sam_bam_reader;
 mod sam_merge_buffer;
 mod taxonomy;
 

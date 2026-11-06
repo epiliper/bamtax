@@ -1,7 +1,6 @@
 use crate::cmd_cluster::Range;
 use crate::taxonomy::Taxonomy;
 use anyhow::Error;
-use rust_htslib::bam::HeaderView;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -36,7 +35,7 @@ impl AlignmentReport {
     pub fn serialize<W: Write>(
         &self,
         writer: &mut csv::Writer<W>,
-        header: &HeaderView,
+        tid_to_name: &dyn Fn(u64) -> String,
         source: &str,
         taxonomy: Option<&Taxonomy>,
     ) -> Result<(), Error> {
@@ -44,8 +43,7 @@ impl AlignmentReport {
         targets.sort_by_key(|(target, _)| *target);
 
         for (target, (alignments, tids)) in targets {
-            let mut references: Vec<_> =
-                tids.iter().map(|tid| String::from_utf8_lossy(header.tid2name(*tid as u32)).into_owned()).collect();
+            let mut references: Vec<_> = tids.iter().map(|tid| tid_to_name(*tid)).collect();
 
             references.sort();
 
@@ -84,7 +82,7 @@ impl LocusTracker {
         Self { map: HashMap::new() }
     }
 
-    pub fn add(&mut self, name: &[u8], forward: bool, target: u32, tid: i32, range: Range) {
+    pub fn add(&mut self, _name: &[u8], _forward: bool, target: u32, tid: i64, range: Range) {
         self.map.entry(target).or_default().push(Alignment {
             // name: name.to_vec(),
             // forward,
@@ -136,7 +134,6 @@ impl LocusTracker {
 #[cfg(test)]
 mod test {
     use super::*;
-    use rust_htslib::bam::{Header, header::HeaderRecord};
 
     fn assert_spans(report: &AlignmentReport, target: u32, expected: &[Range]) {
         let actual: Vec<_> = report.alns[&target].0.iter().map(|alignment| alignment.span).collect();
@@ -146,6 +143,14 @@ mod test {
 
     const NAME: &[u8] = b"NAME";
     const FORWARD: bool = true;
+
+    fn test_tid_to_name(tid: u64) -> String {
+        match tid {
+            0 => "ref-a".to_string(),
+            1 => "ref-b".to_string(),
+            n => format!("ref-{n}"),
+        }
+    }
 
     #[test]
     pub fn test_resolve_1() {
@@ -237,11 +242,10 @@ mod test {
         lt.add(NAME, FORWARD, 0, 0, Range { start: 0, end: 10 });
         lt.add(NAME, FORWARD, 0, 1, Range { start: 20, end: 30 });
         let report = lt.resolve(0, 1);
-        let header = test_header();
         let mut writer = csv::Writer::from_writer(Vec::new());
 
-        report.serialize(&mut writer, &header, "sample.bam", None).unwrap();
-        report.serialize(&mut writer, &header, "sample-2.bam", None).unwrap();
+        report.serialize(&mut writer, &test_tid_to_name, "sample.bam", None).unwrap();
+        report.serialize(&mut writer, &test_tid_to_name, "sample-2.bam", None).unwrap();
 
         let output = String::from_utf8(writer.into_inner().unwrap()).unwrap();
         assert_eq!(
@@ -255,19 +259,11 @@ mod test {
         let mut lt = LocusTracker::new();
         lt.add(NAME, FORWARD, 42, 0, Range { start: 0, end: 10 });
         let report = lt.resolve(0, 1);
-        let header = test_header();
         let mut writer = csv::WriterBuilder::new().delimiter(b'\t').from_writer(Vec::new());
 
-        report.serialize(&mut writer, &header, "sample.bam", None).unwrap();
+        report.serialize(&mut writer, &test_tid_to_name, "sample.bam", None).unwrap();
 
         let output = String::from_utf8(writer.into_inner().unwrap()).unwrap();
         assert_eq!(output, "source\ttarget\tdepth\tloci\treferences\nsample.bam\t42\t1\t1\tref-a\n");
-    }
-
-    fn test_header() -> HeaderView {
-        let mut header = Header::new();
-        header.push_record(HeaderRecord::new(b"SQ").push_tag(b"SN", "ref-a").push_tag(b"LN", 100));
-        header.push_record(HeaderRecord::new(b"SQ").push_tag(b"SN", "ref-b").push_tag(b"LN", 100));
-        HeaderView::from_header(&header)
     }
 }

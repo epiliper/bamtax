@@ -1,4 +1,5 @@
 use crate::cmd_build_db::base_is_nonambig;
+use crate::sam_bam_reader::{RawCigarKind, RawRecord};
 use anyhow::Error;
 use rust_htslib::bam::record::{Cigar, Record};
 
@@ -17,6 +18,31 @@ impl ReadCover {
     pub fn frac_matched(&self) -> f32 {
         self.bases_matched as f32 / self.len as f32
     }
+}
+
+pub fn filter_read_raw(rec: &RawRecord) -> Result<ReadCover, Error> {
+    let mut bases_aligned: usize = 0;
+    let mut bases_matched: usize = 0;
+    let len = rec.seq_len;
+
+    for op in &rec.cigar {
+        match op.op {
+            RawCigarKind::Match => {
+                anyhow::bail!("Wrong SAM format! Need X/= instead of M. Use SAM format 1.4+")
+            }
+            RawCigarKind::Equal => {
+                bases_matched += op.len as usize;
+                bases_aligned += op.len as usize;
+            }
+            RawCigarKind::Diff => {
+                bases_aligned += op.len as usize;
+            }
+            RawCigarKind::Ins | RawCigarKind::SoftClip | RawCigarKind::Pad => {}
+            _ => {}
+        }
+    }
+
+    Ok(ReadCover { bases_aligned, bases_matched, len })
 }
 
 #[inline(always)]
