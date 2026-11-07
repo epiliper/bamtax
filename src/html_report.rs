@@ -12,6 +12,7 @@ use std::process::Command;
 const REPORT_TEMPLATE: &str = include_str!("html_report/report.html");
 const REPORT_STYLE: &str = include_str!("html_report/report.css");
 const REPORT_SCRIPT: &str = include_str!("html_report/report.js");
+const HEATMAP_SCRIPT: &str = include_str!("html_report/heatmap.js");
 const D3_SCRIPT: &str = include_str!("html_report/d3.min.js");
 const D3_SANKEY_SCRIPT: &str = include_str!("html_report/d3-sankey.min.js");
 const KRONA_BRIDGE_SCRIPT: &str = include_str!("html_report/krona_bridge.js");
@@ -24,6 +25,7 @@ const SANKEY_DATA_SLOT: &str = "<!-- BAMTAX:SANKEY_DATA -->";
 const D3_SLOT: &str = "<!-- BAMTAX:D3 -->";
 const D3_SANKEY_SLOT: &str = "<!-- BAMTAX:D3_SANKEY -->";
 const SCRIPT_SLOT: &str = "<!-- BAMTAX:SCRIPT -->";
+const HEATMAP_SCRIPT_SLOT: &str = "<!-- BAMTAX:HEATMAP_SCRIPT -->";
 
 pub struct HtmlSample {
     name: String,
@@ -237,6 +239,7 @@ fn render_report(samples: &[HtmlSample], taxonomy: &Taxonomy, krona: Result<&str
         .replace(SANKEY_DATA_SLOT, &sankey_data)
         .replace(D3_SLOT, D3_SCRIPT)
         .replace(D3_SANKEY_SLOT, D3_SANKEY_SCRIPT)
+        .replace(HEATMAP_SCRIPT_SLOT, HEATMAP_SCRIPT)
         .replace(SCRIPT_SLOT, REPORT_SCRIPT)
 }
 

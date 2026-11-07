@@ -67,8 +67,7 @@ function renderSankey(index) {
   const { graph, width, height, labelX } = layoutSankey(dataset, Math.max(0, sankeyView.clientWidth - 2));
   svg.attr('viewBox', `0 0 ${width} ${height}`).attr('width', width).attr('height', height);
   svg.append('g').attr('fill', 'none').attr('stroke-opacity', .26).selectAll('path').data(graph.links).join('path')
-    .attr('d', d3.sankeyLinkHorizontal()).attr('stroke', 'var(--sankey-link)').attr('stroke-width', link => Math.max(1, link.width))
-    .append('title').text(link => `${link.target.name}: ${link.value}`);
+    .attr('d', d3.sankeyLinkHorizontal()).attr('stroke', 'var(--sankey-link)').attr('stroke-width', link => Math.max(1, link.width));
   const speciesNodes = graph.nodes.filter(item => item.species).sort((a, b) => nodeCenter(a) - nodeCenter(b));
   const labelPositions = spreadLabels(speciesNodes.map(nodeCenter), 20, height - 20, 18);
   svg.append('g').selectAll('path').data(speciesNodes).join('path').attr('class', 'species-leader')
@@ -90,11 +89,9 @@ function renderSankey(index) {
     .attr('x', item => item.x0 - 10).attr('y', item => nodeCenter(item) - 3).attr('text-anchor', 'end');
   groupLabels.append('tspan').text(item => item.name);
   groupLabels.append('tspan').attr('x', item => item.x0 - 10).attr('dy', '1.2em').text(item => item.value);
-  node.filter(item => item.species).append('title').text(nodeDescription);
   node.filter(item => !item.species)
-    .on('mouseenter focus', showSankeyTooltip)
-    .on('mousemove', moveSankeyTooltip)
-    .on('mouseleave blur', hideTransientSankeyTooltip)
+    .on('focus', showSankeyTooltip)
+    .on('blur', hideTransientSankeyTooltip)
     .on('click', toggleSankeyTooltip);
   svg.append('g').selectAll('text').data(speciesNodes).join('text')
     .attr('x', labelX).attr('y', (_, itemIndex) => labelPositions[itemIndex]).attr('dy', '.35em')
@@ -327,6 +324,58 @@ window.addEventListener('message', event => {
 if (krona) {
   krona.addEventListener('load', syncKrona);
 }
+
+const reportTabs = [...document.querySelectorAll('.report-tabs [role="tab"]')];
+let heatmapRendered = false;
+let heatmapRenderFrame;
+function scheduleHeatmapRender() {
+  cancelAnimationFrame(heatmapRenderFrame);
+  heatmapRenderFrame = requestAnimationFrame(() => {
+    if (heatmapRendered && !document.getElementById('heatmap-panel').hidden) {
+      renderHeatmap(sankeyDatasets);
+    }
+  });
+}
+if ('ResizeObserver' in window) {
+  let previousWidth = 0;
+  new ResizeObserver(entries => {
+    const width = Math.round(entries[0].contentRect.width);
+    if (width !== previousWidth) {
+      previousWidth = width;
+      scheduleHeatmapRender();
+    }
+  }).observe(document.getElementById('heatmap-view'));
+} else {
+  window.addEventListener('resize', scheduleHeatmapRender);
+}
+function selectReportTab(tab) {
+  reportTabs.forEach(item => {
+    const selected = item === tab;
+    item.classList.toggle('active', selected);
+    item.setAttribute('aria-selected', String(selected));
+    item.tabIndex = selected ? 0 : -1;
+    document.getElementById(item.getAttribute('aria-controls')).hidden = !selected;
+  });
+  hideSankeyTooltip();
+  document.getElementById('heatmap-tooltip').hidden = true;
+  if (tab.id === 'tab-heatmap') {
+    renderHeatmap(sankeyDatasets);
+    heatmapRendered = true;
+  } else if (tab.id === 'tab-explorer' && !sankeyView.hidden) {
+    scheduleSankeyRender();
+  }
+}
+reportTabs.forEach((tab, index) => {
+  tab.addEventListener('click', () => selectReportTab(tab));
+  tab.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? reportTabs.length - 1
+      : (index + (event.key === 'ArrowRight' ? 1 : -1) + reportTabs.length) % reportTabs.length;
+    selectReportTab(reportTabs[next]);
+    reportTabs[next].focus();
+  });
+});
 
 renderSankey(0);
 

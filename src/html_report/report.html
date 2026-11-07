@@ -17,7 +17,11 @@
       <span>Species-level call</span>
     </div>
   </header>
-  <div class="report-layout">
+  <div class="view-toggle report-tabs" role="tablist" aria-label="Report views">
+    <button type="button" id="tab-explorer" class="active" role="tab" aria-selected="true" aria-controls="explorer-panel">Taxon explorer</button>
+    <button type="button" id="tab-heatmap" role="tab" aria-selected="false" aria-controls="heatmap-panel" tabindex="-1">Across samples</button>
+  </div>
+  <div class="report-layout" id="explorer-panel" role="tabpanel" aria-labelledby="tab-explorer">
     <section class="card taxa-card">
       <div class="toolbar report-toolbar">
         <div class="filter-controls">
@@ -50,10 +54,9 @@
           <button type="button" id="show-krona" aria-pressed="false">Krona</button>
         </div>
       </div>
-      <p id="sankey-help">Calls are grouped by Bacteria, Archaea, Eukaryota, or Viruses and ordered by count within each group. Hover, focus, or select a group for details. Drag open space to pan.</p>
       <div id="sankey-view">
         <div id="sankey-sample-name"></div>
-        <svg id="sankey" role="img" aria-label="Read distribution by species" aria-describedby="sankey-help"></svg>
+        <svg id="sankey" role="img" aria-label="Read distribution by species"></svg>
         <div id="sankey-tooltip" role="tooltip" hidden></div>
       </div>
       <div id="krona-view" hidden>
@@ -61,6 +64,14 @@
       </div>
     </section>
   </div>
+  <section class="card report-tab-panel heatmap-card" id="heatmap-panel" role="tabpanel" aria-labelledby="tab-heatmap" hidden>
+    <h2>Species across samples</h2>
+    <div id="heatmap-legend" aria-label="Depth colour scale"></div>
+    <div id="heatmap-view">
+      <svg id="heatmap" role="img" aria-label="Species by sample alignment depth heatmap"></svg>
+    </div>
+    <div id="heatmap-tooltip" role="tooltip" hidden></div>
+  </section>
   <dialog id="extract-dialog">
     <h2>Extract reads</h2>
     <textarea id="extract-command" readonly aria-label="Extract command"></textarea>
@@ -84,6 +95,7 @@
 </script>
 <script>
 const sankeyDatasets = <!-- BAMTAX:SANKEY_DATA -->;
+<!-- BAMTAX:HEATMAP_SCRIPT -->
 <!-- BAMTAX:SCRIPT -->
 </script>
 </body>

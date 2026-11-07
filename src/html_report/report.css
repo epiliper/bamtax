@@ -137,6 +137,27 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .view-toggle button { border-radius: 0; }
 .view-toggle button:last-child { margin-left: -1px; }
 .view-toggle button.active { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
+.report-tabs { margin-top: 18px; }
+[role="tabpanel"][hidden] { display: none; }
+.heatmap-card { margin-top: 18px; }
+#heatmap-view { max-height: 76vh; overflow: auto; border: 1px solid var(--line); }
+#heatmap { display: block; min-width: 100%; background: #fff; }
+#heatmap text, #heatmap-legend text { fill: var(--ink); font: 12px sans-serif; }
+#heatmap-legend svg { display: block; max-width: 100%; height: auto; }
+#heatmap .heatmap-cell:focus { outline: none; stroke: var(--focus); stroke-width: 2; }
+#heatmap-tooltip {
+  position: fixed;
+  z-index: 40;
+  max-width: min(320px, 90vw);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .97);
+  box-shadow: 0 4px 14px rgba(40, 40, 40, .16);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  font-size: 12px;
+}
 
 .card {
   background: var(--card);
@@ -263,7 +284,6 @@ iframe {
   font-weight: 650;
   overflow-wrap: anywhere;
 }
-#sankey-help { margin: 10px 0 4px; color: var(--muted); font-size: 12px; }
 #sankey { display: block; min-width: 100%; background: #fff; }
 #sankey-view:not(.panning) #sankey { cursor: grab; }
 #sankey-view.panning #sankey { cursor: grabbing; user-select: none; }
@@ -277,7 +297,6 @@ iframe {
   filter: drop-shadow(0 1px 1px rgba(40, 40, 40, .3));
 }
 #sankey .interactive-node:focus rect,
-#sankey .interactive-node:hover rect,
 #sankey .interactive-node.pinned rect {
   stroke: var(--focus);
   stroke-width: 3;
